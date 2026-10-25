@@ -2,29 +2,23 @@
 // --image-list 为离线模式：逐张图片运行同一条 GPU 流水线并输出 JSON，用于与
 // Python 参考流水线逐项对比（tools/model_export/compare_cpp.py）。
 
-#include "capture/dd_capture.h"
-#include "capture/wgc_capture.h"
 #include "common/d3d_util.h"
-#include "common/latest_slot.h"
 #include "common/qpc.h"
-#include "common/stats.h"
 #include "common/wic_image.h"
 #include "common/win_util.h"
 #include "inference/d3d_cuda_interop.h"
 #include "inference/detector.h"
-#include "overlay/overlay.h"
+#include "pipeline/session.h"
 
 #include <unknwn.h>
 #include <winrt/base.h>
 
-#include <atomic>
 #include <clocale>
 #include <cstdio>
 #include <cwchar>
 #include <exception>
 #include <fstream>
 #include <string>
-#include <thread>
 #include <vector>
 
 namespace {
@@ -157,66 +151,15 @@ int RunImages(const Options& o) {
   return 0;
 }
 
-struct OverlayResult {
-  std::vector<RECT> boxes;
-  std::vector<int> classes;
-  int64_t acquireQpc = 0;
-};
-
-void OverlayThread(IDXGIAdapter1* adapter, RECT screenRect, const nr::LatestSlot<OverlayResult>& slot,
-                   const std::atomic<bool>& running, std::atomic<uint64_t>& presents, std::atomic<bool>& failed) {
-  nr::SetCurrentThreadName(L"nr-overlay");
-  try {
-    nr::Overlay overlay(adapter, screenRect);
-    HANDLE waitable = overlay.FrameWaitable();
-    uint64_t seen = 0;
-    OverlayResult current;
-    std::vector<nr::ColorRect> rects;
-    while (running) {
-      const DWORD r = MsgWaitForMultipleObjectsEx(1, &waitable, 100, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
-      if (r == WAIT_OBJECT_0 + 1) {
-        MSG msg;
-        while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) DispatchMessageW(&msg);
-        continue;
-      }
-      if (r != WAIT_OBJECT_0) continue;
-      slot.TakeNewer(seen, current);
-      // 结果过期则清除（设计方案 5.2）
-      const bool stale = nr::QpcToMs(nr::QpcNow() - current.acquireQpc) > 100;
-      rects.clear();
-      if (!stale) {
-        // 高饱和度固定调色板，按类别循环取色
-        static constexpr float kPalette[][3] = {{0.0f, 1.0f, 0.3f}, {1.0f, 0.2f, 0.6f}, {0.1f, 0.7f, 1.0f},
-                                                {1.0f, 0.85f, 0.0f}, {1.0f, 0.45f, 0.0f}, {0.7f, 0.3f, 1.0f}};
-        for (size_t i = 0; i < current.boxes.size(); ++i) {
-          const RECT& b = current.boxes[i];
-          const float* c = kPalette[static_cast<size_t>(current.classes[i]) % std::size(kPalette)];
-          nr::AppendOutline(rects, static_cast<float>(b.left), static_cast<float>(b.top),
-                            static_cast<float>(b.right - b.left), static_cast<float>(b.bottom - b.top), 3.0f,
-                            c[0], c[1], c[2], 1.0f);
-        }
-      }
-      overlay.Present(rects);
-      presents++;
-    }
-  } catch (const std::exception& e) {
-    std::fprintf(stderr, "覆盖层错误：%s\n", e.what());
-    failed = true;
-  }
-}
-
-void PrintPercentiles(const char* label, const std::vector<double>& ms) {
-  const nr::Percentiles p = nr::ComputePercentiles(ms);
+void PrintPercentiles(const char* label, const nr::Percentiles& p) {
   std::printf("  %-26s n=%-7zu P50 %7.3f  P95 %7.3f  P99 %7.3f  最大 %7.3f ms\n", label, p.count, p.p50, p.p95,
               p.p99, p.max);
 }
 
-// 实时模式
+// 实时模式：与图形界面共用 Session
 int RunLive(const Options& o) {
   nr::EnableDpiAwareness();
   nr::DisablePowerThrottling();
-  nr::SetCurrentThreadName(L"nr-detect");
-  winrt::init_apartment(winrt::apartment_type::multi_threaded);
 
   HWND target = o.windowTitle.empty() ? FindWindowW(L"NeuralReflexTestSource", nullptr)
                                       : FindWindowW(nullptr, o.windowTitle.c_str());
@@ -224,123 +167,56 @@ int RunLive(const Options& o) {
     std::fprintf(stderr, "未找到目标窗口\n");
     return 1;
   }
-  HMONITOR monitor = MonitorFromWindow(target, MONITOR_DEFAULTTONEAREST);
-  MONITORINFO mi{sizeof(mi)};
-  GetMonitorInfoW(monitor, &mi);
-  nr::AdapterInfo adapter = nr::FindAdapterForMonitor(monitor);
-  nr::ComPtr<ID3D11DeviceContext> context;
-  auto device = nr::CreateDevice(adapter.adapter.Get(), &context);
-  const int cudaDevice = nr::CudaDeviceForLuid(adapter.luid);
-  std::wprintf(L"适配器：%ls [LUID %ls]，CUDA 设备 %d\n", adapter.name.c_str(), nr::FormatLuid(adapter.luid).c_str(),
-               cudaDevice);
 
-  const int64_t setupStart = nr::QpcNow();
-  nr::Detector detector(device.Get(), cudaDevice, MakeDetectorOptions(o));
-  std::printf("模型 %s，准备耗时 %.0f ms\n", o.model.string().c_str(), nr::QpcToMs(nr::QpcNow() - setupStart));
+  nr::SessionConfig config;
+  config.window = target;
+  config.mode = o.mode == Mode::kWgcWindow ? nr::CaptureMode::kWgc : nr::CaptureMode::kDuplication;
+  config.detector = MakeDetectorOptions(o);
+  config.overlay = o.overlay;
 
-  std::unique_ptr<nr::CaptureSource> source =
-      o.mode == Mode::kWgcWindow ? nr::CreateWgcWindowCapture(device.Get(), target)
-                                 : nr::CreateDuplicationCapture(device.Get(), adapter.output.Get());
-  std::printf("采集方式：%s，时长 %.0f 秒\n", source->Name(), o.duration);
-
-  nr::LatestSlot<OverlayResult> slot;
-  std::atomic<bool> running{true}, overlayFailed{false};
-  std::atomic<uint64_t> presents{0};
-  std::thread overlayThread;
-  if (o.overlay) {
-    overlayThread = std::thread(OverlayThread, adapter.adapter.Get(), mi.rcMonitor, std::cref(slot),
-                                std::cref(running), std::ref(presents), std::ref(overlayFailed));
-  }
-
-  std::vector<double> latency, pre, inf, post;
-  uint64_t frames = 0, detections = 0, overflowFrames = 0, outOfFrame = 0;
-  const int64_t freq = nr::QpcFrequency();
+  nr::Session session;
+  session.Start(config);
   const int64_t start = nr::QpcNow();
-  const int64_t end = start + static_cast<int64_t>(o.duration * freq);
-  int64_t secStart = start;
-  uint64_t secFrames = 0;
-  std::vector<double> secLatency;
-  OverlayResult result;
-
-  while (nr::QpcNow() < end && !overlayFailed && IsWindow(target)) {
-    nr::CapturedFrame frame;
-    const nr::AcquireStatus status = source->AcquireLatest(100, frame);
-    if (status == nr::AcquireStatus::kLost) {
-      if (!source->Recreate()) break;
-      continue;
+  double lastPrinted = 0;
+  nr::SessionSnapshot s;
+  bool announced = false;
+  for (;;) {
+    Sleep(200);
+    s = session.Snapshot(5);
+    if (s.phase == nr::SessionPhase::kFailed) {
+      std::fprintf(stderr, "错误：%s\n", s.error.c_str());
+      return 1;
     }
-    if (status == nr::AcquireStatus::kNewFrame) {
-      // 检测区域为目标窗口客户区（设计方案 4.4）
-      RECT client{};
-      GetClientRect(target, &client);
-      POINT origin{0, 0};
-      ClientToScreen(target, &origin);
-      const LONG x = origin.x - frame.screenOrigin.x, y = origin.y - frame.screenOrigin.y;
-      if (x < 0 || y < 0 || x + client.right > static_cast<LONG>(frame.width) ||
-          y + client.bottom > static_cast<LONG>(frame.height) || client.right <= 0 || client.bottom <= 0) {
-        ++outOfFrame;
-      } else {
-        const D3D11_BOX region{static_cast<UINT>(x), static_cast<UINT>(y), 0, static_cast<UINT>(x + client.right),
-                               static_cast<UINT>(y + client.bottom), 1};
-        const nr::DetectionOutput& r = detector.Run(context.Get(), frame.texture, region,
-                                                    static_cast<float>(origin.x), static_cast<float>(origin.y));
-        const int64_t done = nr::QpcNow();
-
-        result.boxes.clear();
-        result.classes.clear();
-        for (int i = 0; i < r.count; ++i) {
-          const nr::Detection& d = r.detections[i];
-          result.boxes.push_back({static_cast<LONG>(d.x1), static_cast<LONG>(d.y1), static_cast<LONG>(d.x2),
-                                  static_cast<LONG>(d.y2)});
-          result.classes.push_back(d.cls);
-        }
-        result.acquireQpc = frame.acquireQpc;
-        slot.Publish(result);
-
-        ++frames;
-        ++secFrames;
-        detections += static_cast<uint64_t>(r.count);
-        if (r.overflow) ++overflowFrames;
-        const double ms = nr::QpcToMs(done - frame.acquireQpc);
-        latency.push_back(ms);
-        secLatency.push_back(ms);
-        const nr::StageTimes& t = detector.LastTimes();
-        pre.push_back(t.preprocessMs);
-        inf.push_back(t.inferenceMs);
-        post.push_back(t.postprocessMs);
-      }
+    if (s.phase == nr::SessionPhase::kRunning && !announced) {
+      std::printf("适配器 %s，模型 %s，准备耗时 %.0f ms\n", s.adapter.c_str(), o.model.string().c_str(), s.prepareMs);
+      announced = true;
     }
-
-    const int64_t now = nr::QpcNow();
-    if (now - secStart >= freq) {
-      const double secs = static_cast<double>(now - secStart) / freq;
-      const nr::Percentiles p = nr::ComputePercentiles(secLatency);
-      std::printf("[%5.1fs] 检测 %6.1f/s  取得→结果 P50 %6.2f P95 %6.2f ms  框 %d\n", nr::QpcToMs(now - start) / 1000,
-                  secFrames / secs, p.p50, p.p95, static_cast<int>(result.boxes.size()));
-      secStart = now;
-      secFrames = 0;
-      secLatency.clear();
+    for (const nr::SessionSecond& sec : s.seconds) {
+      if (sec.t <= lastPrinted) continue;
+      lastPrinted = sec.t;
+      std::printf("[%5.1fs] 检测 %6.1f/s  取得→结果 P50 %6.2f P95 %6.2f ms  推理 %5.2f ms  框 %.1f\n", sec.t,
+                  sec.detectionsPerSec, sec.latency.p50, sec.latency.p95, sec.inferMs, sec.boxes);
     }
+    if (s.phase == nr::SessionPhase::kRunning && s.elapsed >= o.duration) break;
+    if (nr::QpcToMs(nr::QpcNow() - start) > (o.duration + 120) * 1000) break;  // 准备阶段异常耗时的保护
+  }
+  session.Stop();
+  s = session.Snapshot(0);
+  if (s.phase == nr::SessionPhase::kFailed) {
+    std::fprintf(stderr, "错误：%s\n", s.error.c_str());
+    return 1;
   }
 
-  running = false;
-  if (overlayThread.joinable()) overlayThread.join();
-  detector.SaveCaches();
-
-  const double total = nr::QpcToMs(nr::QpcNow() - start) / 1000.0;
-  std::printf("\n==== 汇总（%.1f 秒，%s）====\n", total, source->Name());
-  std::printf("  完成检测 %llu 次（%.1f/s），平均每帧 %.1f 个框，候选溢出帧 %llu，区域不在画面内 %llu\n",
-              static_cast<unsigned long long>(frames), frames / total,
-              frames ? static_cast<double>(detections) / frames : 0.0, static_cast<unsigned long long>(overflowFrames),
-              static_cast<unsigned long long>(outOfFrame));
-  PrintPercentiles("取得→结果可用（主机）", latency);
-  PrintPercentiles("GPU 预处理", pre);
-  PrintPercentiles("GPU 推理", inf);
-  PrintPercentiles("GPU 后处理+回读", post);
-  if (o.overlay) {
-    std::printf("  覆盖层呈现 %llu 次（%.1f/s）\n", static_cast<unsigned long long>(presents.load()), presents / total);
-  }
-  return overlayFailed ? 1 : 0;
+  std::printf("\n==== 汇总（%.1f 秒）====\n", s.elapsed);
+  std::printf("  完成检测 %llu 次（%.1f/s），候选溢出帧 %llu，本进程显存 %.0f MB / 预算 %.0f MB\n",
+              static_cast<unsigned long long>(s.detections), s.elapsed > 0 ? s.detections / s.elapsed : 0.0,
+              static_cast<unsigned long long>(s.overflowFrames), s.vramUsedBytes / 1048576.0,
+              s.vramBudgetBytes / 1048576.0);
+  PrintPercentiles("取得→结果可用（主机）", s.latency);
+  PrintPercentiles("GPU 预处理", s.pre);
+  PrintPercentiles("GPU 推理", s.infer);
+  PrintPercentiles("GPU 后处理+回读", s.post);
+  return 0;
 }
 
 }  // namespace

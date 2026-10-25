@@ -39,6 +39,13 @@ class Detector {
   const StageTimes& LastTimes() const { return times_; }
   const LetterboxParams& LastLetterbox() const { return letterbox_; }
   int InputSize() const { return inputSize_; }
+  int NumClasses() const { return post_.numClasses; }
+
+  // 下一次 Run 起生效
+  void SetThresholds(float conf, float iou) {
+    post_.confThreshold = conf;
+    post_.iouThreshold = iou;
+  }
 
   // 调试用：读回最近一次的模型输入张量
   void ReadInput(float* host) const;

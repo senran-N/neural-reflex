@@ -13,7 +13,20 @@ struct Candidate {
   int32_t cls;
 };
 
-__global__ void DecodeKernel(const float* out, PostprocessParams p, Candidate* candidates, int32_t* counters) {
+// 溢出时按分数保留：分数落在 (conf, 1] 的直方图里，先算出截断格，再写入候选。
+// 高于截断格的候选占用预留槽位，只有截断格内部的取舍是任意的（格宽约 (1 - conf) / 2048）。
+constexpr int kBins = 2048;
+
+// 计数器布局
+enum Counter { kTotal = 0, kHigh = 1, kMid = 2, kCutBin = 3, kHighCount = 4, kCounterCount = 5 };
+
+__device__ int ScoreBin(float s, float conf) {
+  const int b = static_cast<int>((s - conf) / (1.0f - conf) * kBins);
+  return min(max(b, 0), kBins - 1);
+}
+
+__global__ void ScoreKernel(const float* out, PostprocessParams p, float* bestScore, int32_t* bestClass,
+                            int32_t* histogram, int32_t* counters) {
   const int a = blockIdx.x * blockDim.x + threadIdx.x;
   if (a >= p.numAnchors) return;
 
@@ -27,16 +40,53 @@ __global__ void DecodeKernel(const float* out, PostprocessParams p, Candidate* c
       cls = c;
     }
   }
+  bestScore[a] = best;
+  bestClass[a] = cls;
+  if (!(best > p.confThreshold)) return;
+  atomicAdd(&counters[kTotal], 1);
+  atomicAdd(&histogram[ScoreBin(best, p.confThreshold)], 1);
+}
+
+// 单线程：从最高格向下累加，找到使保留数不超过容量的截断格
+__global__ void CutoffKernel(const int32_t* histogram, int32_t* counters) {
+  const int total = counters[kTotal];
+  if (total <= kMaxCandidates) {
+    counters[kCutBin] = -1;
+    counters[kHighCount] = total;
+    return;
+  }
+  int kept = 0;
+  for (int b = kBins - 1; b >= 0; --b) {
+    if (kept + histogram[b] > kMaxCandidates) {
+      counters[kCutBin] = b;
+      counters[kHighCount] = kept;
+      return;
+    }
+    kept += histogram[b];
+  }
+}
+
+__global__ void WriteKernel(const float* out, PostprocessParams p, const float* bestScore, const int32_t* bestClass,
+                            Candidate* candidates, int32_t* counters) {
+  const int a = blockIdx.x * blockDim.x + threadIdx.x;
+  if (a >= p.numAnchors) return;
+  const float best = bestScore[a];
   if (!(best > p.confThreshold)) return;
 
-  const int slot = atomicAdd(&counters[0], 1);
-  if (slot >= kMaxCandidates) {
-    atomicAdd(&counters[1], 1);
+  const int bin = ScoreBin(best, p.confThreshold);
+  const int cut = counters[kCutBin];
+  int slot;
+  if (bin > cut) {
+    slot = atomicAdd(&counters[kHigh], 1);
+  } else if (bin == cut) {
+    slot = counters[kHighCount] + atomicAdd(&counters[kMid], 1);
+    if (slot >= kMaxCandidates) return;
+  } else {
     return;
   }
   const float cx = out[a], cy = out[p.numAnchors + a];
   const float w = out[2 * p.numAnchors + a], h = out[3 * p.numAnchors + a];
-  candidates[slot] = {cx - w * 0.5f, cy - h * 0.5f, cx + w * 0.5f, cy + h * 0.5f, best, cls};
+  candidates[slot] = {cx - w * 0.5f, cy - h * 0.5f, cx + w * 0.5f, cy + h * 0.5f, best, bestClass[a]};
 }
 
 __device__ float Iou(const float4& a, const float4& b) {
@@ -58,7 +108,7 @@ NmsKernel(const Candidate* candidates, const int32_t* counters, PostprocessParam
   __shared__ uint8_t suppressed[kMaxCandidates];
 
   const int t = threadIdx.x;
-  const int n = min(counters[0], kMaxCandidates);
+  const int n = min(counters[kTotal], kMaxCandidates);
   scores[t] = t < n ? candidates[t].score : -FLT_MAX;
   order[t] = static_cast<int16_t>(t);
   __syncthreads();
@@ -110,17 +160,21 @@ NmsKernel(const Candidate* candidates, const int32_t* counters, PostprocessParam
       d.cls = classes[i];
     }
     output->count = kept;
-    output->candidates = counters[0];
-    output->overflow = counters[1];
+    output->candidates = counters[kTotal];
+    output->overflow = max(0, counters[kTotal] - kMaxCandidates);
   }
 }
 
 }  // namespace
 
-PostprocessBuffers AllocatePostprocessBuffers() {
+PostprocessBuffers AllocatePostprocessBuffers(int numAnchors) {
   PostprocessBuffers b;
+  b.numAnchors = numAnchors;
   CudaCheck(cudaMalloc(&b.candidates, sizeof(Candidate) * kMaxCandidates), "cudaMalloc(candidates)");
-  CudaCheck(cudaMalloc(&b.counters, sizeof(int32_t) * 2), "cudaMalloc(counters)");
+  CudaCheck(cudaMalloc(&b.counters, sizeof(int32_t) * kCounterCount), "cudaMalloc(counters)");
+  CudaCheck(cudaMalloc(&b.histogram, sizeof(int32_t) * kBins), "cudaMalloc(histogram)");
+  CudaCheck(cudaMalloc(&b.bestScore, sizeof(float) * numAnchors), "cudaMalloc(scores)");
+  CudaCheck(cudaMalloc(&b.bestClass, sizeof(int32_t) * numAnchors), "cudaMalloc(classes)");
   CudaCheck(cudaMalloc(&b.output, sizeof(DetectionOutput)), "cudaMalloc(detections)");
   return b;
 }
@@ -128,16 +182,24 @@ PostprocessBuffers AllocatePostprocessBuffers() {
 void FreePostprocessBuffers(PostprocessBuffers& b) {
   cudaFree(b.candidates);
   cudaFree(b.counters);
+  cudaFree(b.histogram);
+  cudaFree(b.bestScore);
+  cudaFree(b.bestClass);
   cudaFree(b.output);
   b = {};
 }
 
 void LaunchPostprocess(const float* modelOutput, const PostprocessParams& params, const LetterboxParams& letterbox,
                        const PostprocessBuffers& buffers, cudaStream_t stream) {
-  CudaCheck(cudaMemsetAsync(buffers.counters, 0, sizeof(int32_t) * 2, stream), "cudaMemsetAsync(counters)");
+  CudaCheck(cudaMemsetAsync(buffers.counters, 0, sizeof(int32_t) * kCounterCount, stream), "cudaMemsetAsync(counters)");
+  CudaCheck(cudaMemsetAsync(buffers.histogram, 0, sizeof(int32_t) * kBins, stream), "cudaMemsetAsync(histogram)");
   const int block = 256;
-  DecodeKernel<<<(params.numAnchors + block - 1) / block, block, 0, stream>>>(
-      modelOutput, params, static_cast<Candidate*>(buffers.candidates), buffers.counters);
+  const int grid = (params.numAnchors + block - 1) / block;
+  ScoreKernel<<<grid, block, 0, stream>>>(modelOutput, params, buffers.bestScore, buffers.bestClass, buffers.histogram,
+                                          buffers.counters);
+  CutoffKernel<<<1, 1, 0, stream>>>(buffers.histogram, buffers.counters);
+  WriteKernel<<<grid, block, 0, stream>>>(modelOutput, params, buffers.bestScore, buffers.bestClass,
+                                          static_cast<Candidate*>(buffers.candidates), buffers.counters);
   NmsKernel<<<1, kMaxCandidates, 0, stream>>>(static_cast<const Candidate*>(buffers.candidates), buffers.counters,
                                               params, letterbox, buffers.output);
 }

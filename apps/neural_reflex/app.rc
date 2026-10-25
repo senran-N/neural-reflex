@@ -1,0 +1,27 @@
+#include "resource.h"
+#include <winver.h>
+
+IDI_APP ICON "app.ico"
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION 0,1,0,0
+ PRODUCTVERSION 0,1,0,0
+ FILEOS VOS_NT_WINDOWS32
+ FILETYPE VFT_APP
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "080404b0"
+    BEGIN
+      VALUE "FileDescription", "Neural Reflex"
+      VALUE "ProductName", "Neural Reflex"
+      VALUE "FileVersion", "0.1.0"
+      VALUE "ProductVersion", "0.1.0"
+      VALUE "OriginalFilename", "NeuralReflex.exe"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x0804, 1200
+  END
+END

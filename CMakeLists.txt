@@ -67,10 +67,42 @@ if(NR_ENABLE_CUDA)
   target_link_libraries(nr_inference PUBLIC nr_common CUDA::cudart_static TRTRTX::tensorrt
                                             TRTRTX::nvonnxparser)
 
+  add_library(nr_pipeline STATIC src/pipeline/session.cpp)
+  target_link_libraries(nr_pipeline PUBLIC nr_inference nr_capture nr_overlay)
+
   add_executable(nr_detect apps/nr_detect/main.cpp)
-  target_link_libraries(nr_detect PRIVATE nr_inference nr_capture nr_overlay)
+  target_link_libraries(nr_detect PRIVATE nr_pipeline)
   # 运行时需要 TensorRT for RTX 的 DLL
   add_custom_command(TARGET nr_detect POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:TRTRTX::tensorrt>
             $<TARGET_FILE:TRTRTX::nvonnxparser> $<TARGET_FILE_DIR:nr_detect>)
+
+  # 桌面程序：WebView2 界面（加载器静态链接，运行时由系统提供）
+  set(NR_WEBVIEW2_ROOT "$ENV{WEBVIEW2_ROOT}" CACHE PATH "WebView2 SDK（NuGet 包解压目录）")
+  if(NOT EXISTS "${NR_WEBVIEW2_ROOT}/build/native/include/WebView2.h")
+    message(FATAL_ERROR "未找到 WebView2 SDK，请设置 WEBVIEW2_ROOT 或 NR_WEBVIEW2_ROOT")
+  endif()
+  add_executable(NeuralReflex WIN32
+    apps/neural_reflex/main.cpp
+    apps/neural_reflex/controller.cpp
+    apps/neural_reflex/targets.cpp
+    apps/neural_reflex/app.rc
+    apps/neural_reflex/app.manifest
+  )
+  target_include_directories(NeuralReflex PRIVATE "${NR_WEBVIEW2_ROOT}/build/native/include" third_party)
+  target_link_libraries(NeuralReflex PRIVATE nr_pipeline
+                        "${NR_WEBVIEW2_ROOT}/build/native/x64/WebView2LoaderStatic.lib" dwmapi shell32 version)
+  add_custom_command(TARGET NeuralReflex POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:TRTRTX::tensorrt>
+            $<TARGET_FILE:TRTRTX::nvonnxparser> $<TARGET_FILE_DIR:NeuralReflex>
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/ui $<TARGET_FILE_DIR:NeuralReflex>/ui)
+
+  # 发布目录：cmake --install build --config Release --prefix dist/NeuralReflex
+  install(TARGETS NeuralReflex RUNTIME DESTINATION .)
+  install(FILES $<TARGET_FILE:TRTRTX::tensorrt> $<TARGET_FILE:TRTRTX::nvonnxparser> DESTINATION .)
+  install(DIRECTORY ui/ DESTINATION ui)
+  install(FILES models/reference/yolo26n-640-nms-fp16.onnx models/reference/yolo26n-640-nms-fp32.json
+          DESTINATION models OPTIONAL)
+  install(FILES LICENSE THIRD_PARTY_NOTICES.md DESTINATION . OPTIONAL)
+  install(DIRECTORY third_party/licenses/ DESTINATION third_party/licenses)
 endif()

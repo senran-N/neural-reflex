@@ -8,10 +8,16 @@ namespace {
 
 constexpr wchar_t kClassName[] = L"NeuralReflexOverlay";
 
+// 覆盖层的生命周期只由会话控制：外部发来的关闭请求（例如 taskkill）一律忽略
+LRESULT CALLBACK OverlayProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+  if (msg == WM_CLOSE) return 0;
+  return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
 void RegisterOverlayClass() {
   static const bool registered = [] {
     WNDCLASSEXW wc{sizeof(wc)};
-    wc.lpfnWndProc = DefWindowProcW;
+    wc.lpfnWndProc = OverlayProc;
     wc.hInstance = GetModuleHandleW(nullptr);
     wc.lpszClassName = kClassName;
     return RegisterClassExW(&wc) != 0;

@@ -19,8 +19,9 @@ Detector::Detector(ID3D11Device* device, int cudaDevice, const DetectorOptions& 
   if (in.shape.size() != 4 || in.shape[0] != 1 || in.shape[1] != 3 || in.shape[2] != in.shape[3]) {
     throw std::runtime_error("模型输入须为 [1, 3, S, S]");
   }
-  if (out.shape.size() != 3 || out.shape[0] != 1 || out.shape[1] <= 4) {
-    throw std::runtime_error("模型输出须为 [1, 4 + nc, N]（一对多检测头）");
+  // 一对多检测头 [1, 4 + nc, N] 的候选数远多于通道数；端到端头 [1, 300, 6] 不满足，需明确拒绝
+  if (out.shape.size() != 3 || out.shape[0] != 1 || out.shape[1] <= 4 || out.shape[2] <= out.shape[1]) {
+    throw std::runtime_error("模型输出须为 [1, 4 + nc, N]（一对多检测头）；暂不支持端到端检测头");
   }
   inputSize_ = static_cast<int>(in.shape[2]);
   post_.numClasses = static_cast<int>(out.shape[1] - 4);
@@ -28,7 +29,7 @@ Detector::Detector(ID3D11Device* device, int cudaDevice, const DetectorOptions& 
   post_.confThreshold = options.confThreshold;
   post_.iouThreshold = options.iouThreshold;
 
-  buffers_ = AllocatePostprocessBuffers();
+  buffers_ = AllocatePostprocessBuffers(post_.numAnchors);
   CudaCheck(cudaMallocHost(&hostOutput_, sizeof(DetectionOutput)), "cudaMallocHost(结果)");
   fence_ = std::make_unique<SharedFence>(device);
 }

@@ -36,15 +36,20 @@ struct PostprocessParams {
 };
 
 struct PostprocessBuffers {
-  void* candidates = nullptr;  // kMaxCandidates 个候选
-  int32_t* counters = nullptr;  // [0] 候选数 [1] 溢出数
+  int numAnchors = 0;
+  void* candidates = nullptr;    // kMaxCandidates 个候选
+  int32_t* counters = nullptr;   // 候选总数、槽位计数与截断格
+  int32_t* histogram = nullptr;  // 候选分数直方图，用于溢出时按分数保留
+  float* bestScore = nullptr;    // 每个锚点的最高类别分数
+  int32_t* bestClass = nullptr;
   DetectionOutput* output = nullptr;
 };
 
-PostprocessBuffers AllocatePostprocessBuffers();
+PostprocessBuffers AllocatePostprocessBuffers(int numAnchors);
 void FreePostprocessBuffers(PostprocessBuffers& buffers);
 
 // 解码一对多检测头输出 [1, 4 + nc, N]，单标签筛选，按类别 NMS，还原坐标。
+// 候选超过容量时保留分数最高的 kMaxCandidates 个。
 // 与 tools/model_export/reference_pipeline.py 的 postprocess 一致。
 void LaunchPostprocess(const float* modelOutput, const PostprocessParams& params,
                        const LetterboxParams& letterbox, const PostprocessBuffers& buffers,

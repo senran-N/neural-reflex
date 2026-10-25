@@ -55,11 +55,44 @@ def match_rate(a, b, iou_thr=0.9):
     return matched / max(len(ba), len(bb)), len(ba), len(bb)
 
 
+def coco_map(gt, image_ids, detections):
+    if not detections:
+        return 0.0, 0.0
+    with contextlib.redirect_stdout(io.StringIO()):
+        ev = COCOeval(gt, gt.loadRes(detections), "bbox")
+        ev.params.imgIds = image_ids
+        ev.evaluate(); ev.accumulate(); ev.summarize()
+    return round(ev.stats[0] * 100, 2), round(ev.stats[1] * 100, 2)
+
+
+def evaluate_cpp(gt, image_ids, jsonl):
+    by_name = {gt.loadImgs(i)[0]["file_name"]: i for i in image_ids}
+    detections, seen, overflow, times = [], set(), 0, []
+    for line in open(jsonl, encoding="utf-8"):
+        row = json.loads(line)
+        image_id = by_name.get(pathlib.Path(row["image"]).name)
+        if image_id is None:
+            continue
+        seen.add(image_id)
+        overflow += row["overflow"] > 0
+        times.append(row["times"])
+        for x1, y1, x2, y2, score, cls in row["det"]:
+            detections.append({"image_id": image_id, "category_id": COCO80_TO_91[int(cls)],
+                               "bbox": [x1, y1, x2 - x1, y2 - y1], "score": score})
+    ids = sorted(seen)
+    m, m50 = coco_map(gt, ids, detections)
+    t = np.median(np.array(times[10:] or times), axis=0)
+    print(json.dumps({"images": len(ids), "mAP50_95": m, "mAP50": m50, "overflow_images": int(overflow),
+                      "median_gpu_ms_pre_infer_post": [round(float(v), 4) for v in t]}, ensure_ascii=False, indent=2))
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--coco", required=True)
     parser.add_argument("--limit", type=int, default=5000)
-    parser.add_argument("--run", action="append", required=True, help="后端:onnx 路径，后端为 ort 或 trt")
+    parser.add_argument("--run", action="append", help="后端:onnx 路径，后端为 ort 或 trt")
+    parser.add_argument("--cpp-jsonl", help="直接评估 nr_detect --image-list 的输出（需以 --conf 0.001 运行）")
+    parser.add_argument("--write-list", help="把前 --limit 张图片的路径写入该文件后退出")
     parser.add_argument("--out", default="cache/eval")
     args = parser.parse_args()
 
@@ -68,8 +101,16 @@ def main():
         gt = COCO(str(coco_root / "annotations" / "instances_val2017.json"))
     image_ids = sorted(gt.getImgIds())[: args.limit]
 
+    if args.write_list:
+        paths = [str((coco_root / "val2017" / gt.loadImgs(i)[0]["file_name"]).resolve()) for i in image_ids]
+        pathlib.Path(args.write_list).write_text("\n".join(paths) + "\n", encoding="utf-8")
+        return
+    if args.cpp_jsonl:
+        evaluate_cpp(gt, image_ids, args.cpp_jsonl)
+        return
+
     runs = []
-    for spec in args.run:
+    for spec in args.run or []:
         kind, path = spec.split(":", 1)
         runs.append(make_backend(kind, path))
     names = [r.name for r in runs]
@@ -113,15 +154,8 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
     summary = {"images": len(image_ids), "runs": {}}
     for n in names:
-        if not detections[n]:
-            summary["runs"][n] = {"mAP50_95": 0.0, "mAP50": 0.0}
-            continue
-        with contextlib.redirect_stdout(io.StringIO()):
-            dt = gt.loadRes(detections[n])
-            ev = COCOeval(gt, dt, "bbox")
-            ev.params.imgIds = image_ids
-            ev.evaluate(); ev.accumulate(); ev.summarize()
-        entry = {"mAP50_95": round(ev.stats[0] * 100, 2), "mAP50": round(ev.stats[1] * 100, 2),
+        m, m50 = coco_map(gt, image_ids, detections[n])
+        entry = {"mAP50_95": m, "mAP50": m50,
                  "mean_infer_ms_incl_copy": round(infer_time[n] / len(image_ids) * 1000, 2)}
         if n in max_abs:
             entry["max_abs_output_diff"] = round(max_abs[n], 5)
