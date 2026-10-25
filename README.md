@@ -72,3 +72,9 @@ tensorrt_rtx.exe --onnx=yolo26n-640-nms-fp32.onnx --saveEngine=yolo26n-640-nms-f
 | TensorRT for RTX 1.7.1.116（CUDA 13.4） | `D:\SDK\TensorRT-RTX-1.7.1.116` |
 | Nsight Systems | `D:\SDK\nsight-systems` |
 | 模型导出 Python 环境 | `D:\SDK\venvs\nr-export` |
+
+## 许可证
+
+本项目以 [GNU Affero General Public License v3.0](LICENSE)（AGPL-3.0）发布。参考模型 Ultralytics YOLO26n 的权重同为 AGPL-3.0；其他第三方组件的许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
+AGPL-3.0 要求：分发本程序（含修改版）时须同时提供对应源代码；若修改后通过网络向他人提供服务，也须向这些用户提供源代码。
