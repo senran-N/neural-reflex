@@ -13,6 +13,7 @@ Windows 实时视觉检测软件。设计见 [docs/performance-design.md](docs/p
 | `src/overlay` | DirectComposition 透明覆盖层，可等待交换链，最大帧延迟 1 |
 | `apps/nr_probe` | 链路探针：采集测试源 → 解码帧标签 → 覆盖层画框，并统计延迟 |
 | `tools/nr_testsource` | 合成测试源：移动目标 + 左上角帧标签（帧号、生成时刻、目标框） |
+| `tools/model_export` | 参考模型（YOLO26n）导出为 ONNX 并记录输入输出契约 |
 
 ## 构建
 
@@ -36,6 +37,16 @@ build\bin\Release\nr_probe.exe --mode wgc --duration 30
 
 探针画出的框来自测试源标签里的真值，用于验证采集和坐标还原，不是检测结果。
 
+## 参考模型
+
+```
+cd models/reference
+<导出环境>/python ../../tools/model_export/export_reference.py --out .
+tensorrt_rtx.exe --onnx=yolo26n-640-nms-fp32.onnx --saveEngine=yolo26n-640-nms-fp32.engine
+```
+
+模型、引擎和缓存不入库（体积大，且引擎与设备、驱动绑定）。Ultralytics 权重为 AGPL-3.0。
+
 ## 开发环境（本机）
 
 | 组件 | 位置 |
@@ -43,3 +54,4 @@ build\bin\Release\nr_probe.exe --mode wgc --duration 30
 | CUDA 13.4.3（免安装组件） | `D:\SDK\cuda-13.4.3` |
 | TensorRT for RTX 1.7.1.116（CUDA 13.4） | `D:\SDK\TensorRT-RTX-1.7.1.116` |
 | Nsight Systems | `D:\SDK\nsight-systems` |
+| 模型导出 Python 环境 | `D:\SDK\venvs\nr-export` |
