@@ -1,0 +1,30 @@
+# 构建产物
+build/
+out/
+*.obj
+*.pdb
+*.ilk
+*.exe
+*.dll
+*.lib
+*.exp
+
+# IDE
+.vs/
+.vscode/
+*.user
+
+# 模型、引擎与运行时缓存（体积大且与设备、驱动绑定）
+*.onnx
+*.engine
+*.plan
+*.trt
+*.cache
+models/
+cache/
+
+# 测试与分析输出
+*.nsys-rep
+*.qdrep
+*.etl
+reports/raw/
