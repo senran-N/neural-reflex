@@ -3,14 +3,24 @@
   "configurePresets": [
     {
       "name": "vs2022",
-      "displayName": "Visual Studio 2022 x64",
+      "displayName": "Visual Studio 2022 x64（含 CUDA，读取 CUDA_PATH 与 TENSORRT_RTX_ROOT）",
       "generator": "Visual Studio 17 2022",
       "architecture": "x64",
-      "binaryDir": "${sourceDir}/build"
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": { "CMAKE_GENERATOR_TOOLSET": "cuda=$env{CUDA_PATH}" }
+    },
+    {
+      "name": "vs2022-nocuda",
+      "displayName": "Visual Studio 2022 x64（不含推理模块）",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build-nocuda",
+      "cacheVariables": { "NR_ENABLE_CUDA": "OFF" }
     }
   ],
   "buildPresets": [
     { "name": "release", "configurePreset": "vs2022", "configuration": "Release" },
-    { "name": "debug", "configurePreset": "vs2022", "configuration": "Debug" }
+    { "name": "debug", "configurePreset": "vs2022", "configuration": "Debug" },
+    { "name": "release-nocuda", "configurePreset": "vs2022-nocuda", "configuration": "Release" }
   ]
 }

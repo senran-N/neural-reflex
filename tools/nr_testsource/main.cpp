@@ -5,8 +5,10 @@
 #include "common/frame_tag.h"
 #include "common/qpc.h"
 #include "common/quad_renderer.h"
+#include "common/wic_image.h"
 #include "common/win_util.h"
 
+#include <algorithm>
 #include <clocale>
 #include <cmath>
 #include <cstdio>
@@ -25,12 +27,14 @@ struct Options {
   double fps = 0;          // 0 表示跟随垂直同步
   double duration = 0;     // 秒，0 表示直到关闭窗口
   const wchar_t* logPath = nullptr;
+  const wchar_t* imagePath = nullptr;  // 设置后以移动的图片代替纯色目标
 };
 
 void PrintUsage() {
   std::fwprintf(stderr,
-                L"用法：nr_testsource [--fps N] [--size WxH] [--duration 秒] [--log 路径.csv]\n"
-                L"  --fps 0（默认）跟随显示器垂直同步；N>0 时按 N FPS 定时呈现并允许撕裂\n");
+                L"用法：nr_testsource [--fps N] [--size WxH] [--duration 秒] [--log 路径.csv] [--image 图片]\n"
+                L"  --fps 0（默认）跟随显示器垂直同步；N>0 时按 N FPS 定时呈现并允许撕裂\n"
+                L"  --image 让图片在窗口内往返移动，供检测模型使用；标签中的框为图片位置\n");
 }
 
 bool ParseOptions(int argc, wchar_t** argv, Options& o) {
@@ -46,6 +50,8 @@ bool ParseOptions(int argc, wchar_t** argv, Options& o) {
       o.duration = std::wcstod(v, nullptr);
     } else if (!std::wcscmp(a, L"--log") && (v = next())) {
       o.logPath = v;
+    } else if (!std::wcscmp(a, L"--image") && (v = next())) {
+      o.imagePath = v;
     } else {
       return false;
     }
@@ -98,13 +104,11 @@ bool TearingSupported() {
   return allow != FALSE;
 }
 
-// 目标在客户区内往返移动，避开左上角标签区域
-void TargetAt(double t, const Options& o, float& x, float& y, float& w, float& h) {
-  w = 120;
-  h = 90;
+// 目标（w x h）在客户区内往返移动，避开左上角标签区域
+void TargetAt(double t, const Options& o, float w, float h, float& x, float& y) {
   const float top = static_cast<float>(nr::tag::kOriginY + nr::tag::kHeightPx + 24);
-  const float spanX = static_cast<float>(o.width) - w;
-  const float spanY = static_cast<float>(o.height) - h - top;
+  const float spanX = std::max(0.0f, static_cast<float>(o.width) - w);
+  const float spanY = std::max(0.0f, static_cast<float>(o.height) - h - top);
   auto bounce = [](double v) { double f = std::fmod(v, 2.0); return f < 1.0 ? f : 2.0 - f; };
   x = static_cast<float>(bounce(t * 0.35) * spanX);
   y = top + static_cast<float>(bounce(t * 0.23) * spanY);
@@ -151,6 +155,18 @@ int Run(const Options& o) {
   nr::Check(swapChain->GetBuffer(0, IID_PPV_ARGS(&backBuffer)), "GetBuffer");
   nr::ComPtr<ID3D11RenderTargetView> rtv;
   nr::Check(device->CreateRenderTargetView(backBuffer.Get(), nullptr, &rtv), "CreateRenderTargetView");
+
+  // 图片模式：图片超出可用区域时裁掉右侧和下方
+  nr::ComPtr<ID3D11Texture2D> image;
+  float targetW = 120, targetH = 90;
+  if (o.imagePath) {
+    nr::Check(CoInitializeEx(nullptr, COINIT_MULTITHREADED), "CoInitializeEx");
+    const nr::BgraImage loaded = nr::LoadBgraImage(o.imagePath);
+    image = nr::CreateTexture(device.Get(), loaded);
+    const float top = static_cast<float>(nr::tag::kOriginY + nr::tag::kHeightPx + 24);
+    targetW = std::min(static_cast<float>(loaded.width), static_cast<float>(w));
+    targetH = std::min(static_cast<float>(loaded.height), static_cast<float>(h) - top);
+  }
 
   nr::QuadRenderer renderer;
   renderer.Init(device.Get(), nr::tag::kBits + 8);
@@ -205,8 +221,11 @@ int Run(const Options& o) {
     }
 
     const int64_t renderQpc = nr::QpcNow();
-    float tx, ty, tw, th;
-    TargetAt(nr::QpcToMs(renderQpc - start) / 1000.0, o, tx, ty, tw, th);
+    const float tw = targetW, th = targetH;
+    float tx, ty;
+    TargetAt(nr::QpcToMs(renderQpc - start) / 1000.0, o, tw, th, tx, ty);
+    tx = std::floor(tx);
+    ty = std::floor(ty);
 
     nr::tag::Payload payload;
     payload.frameId = ++frameId;
@@ -218,7 +237,7 @@ int Run(const Options& o) {
     const auto bits = nr::tag::Encode(payload);
 
     rects.clear();
-    rects.push_back({tx, ty, tw, th, 0.95f, 0.30f, 0.15f, 1});
+    if (!image) rects.push_back({tx, ty, tw, th, 0.95f, 0.30f, 0.15f, 1});
     constexpr float kCell = nr::tag::kCellPx;
     rects.push_back({nr::tag::kOriginX - 4.0f, nr::tag::kOriginY - 4.0f, nr::tag::kWidthPx + 8.0f,
                      nr::tag::kHeightPx + 8.0f, 0, 0, 0, 1});
@@ -231,6 +250,11 @@ int Run(const Options& o) {
     const float background[4] = {0.18f, 0.20f, 0.24f, 1};
     context->OMSetRenderTargets(1, rtv.GetAddressOf(), nullptr);
     context->ClearRenderTargetView(rtv.Get(), background);
+    if (image) {
+      const D3D11_BOX src{0, 0, 0, static_cast<UINT>(tw), static_cast<UINT>(th), 1};
+      context->CopySubresourceRegion(backBuffer.Get(), 0, static_cast<UINT>(tx), static_cast<UINT>(ty), 0,
+                                     image.Get(), 0, &src);
+    }
     renderer.Draw(context.Get(), static_cast<float>(w), static_cast<float>(h), rects.data(), rects.size());
     nr::Check(swapChain->Present(paced ? 0 : 1, tearing ? DXGI_PRESENT_ALLOW_TEARING : 0), "Present");
     const int64_t presentReturnQpc = nr::QpcNow();
