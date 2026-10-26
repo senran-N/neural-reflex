@@ -197,7 +197,7 @@
       </div>
 
       <div class="setting-row">
-        <div><h2>呈现与执行</h2><p class="desc">两项都会让运行中的会话重新启动。</p></div>
+        <div><h2>呈现与执行</h2><p class="desc">三项都会让运行中的会话重新启动。</p></div>
         <div class="panel">
           <div class="switch-row">
             <div><div class="title">覆盖层画框</div><div class="desc">在目标所在显示器上绘制检测框，鼠标可穿透。</div></div>
@@ -206,6 +206,10 @@
           <div class="switch-row">
             <div><div class="title">CUDA Graph</div><div class="desc">把推理整体录制为一张图重放，减少每帧的提交开销。</div></div>
             <button class="switch" type="button" role="switch" id="st-graph" aria-checked="true" aria-label="CUDA Graph"></button>
+          </div>
+          <div class="switch-row">
+            <div><div class="title">GPU 实时调度优先级</div><div class="desc">与长时间占用 GPU 的程序同时运行时，检测不再被其挤占；对方分到的 GPU 时间会相应减少（实测帧率约降 12%）。</div></div>
+            <button class="switch" type="button" role="switch" id="st-realtime" aria-checked="false" aria-label="GPU 实时调度优先级"></button>
           </div>
         </div>
       </div>

@@ -15,7 +15,7 @@ window.NR_PREVIEW = (emit) => {
     { hwnd: '1180244', title: 'TensorRT for RTX 文档 - Microsoft Edge', exe: 'msedge.exe', pid: 22716, width: 1536, height: 980, minimized: true, icon: '' },
   ];
   const monitors = [{ index: 0, width: 2560, height: 1600, refreshHz: 165, primary: true }];
-  const settings = { conf: 0.25, iou: 0.7, mode: 'wgc', overlay: true, cudaGraph: true };
+  const settings = { conf: 0.25, iou: 0.7, mode: 'wgc', overlay: true, cudaGraph: true, gpuRealtime: false };
   let target = { kind: 'window', ...windows[0], icon: 'img/mark.svg', alive: true };
   let phase = 'running';
 

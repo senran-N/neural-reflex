@@ -17,7 +17,7 @@
 
   const state = {
     phase: 'idle', error: '', target: { kind: 'none' }, model: null, gpu: '',
-    settings: { conf: 0.25, iou: 0.7, mode: 'wgc', overlay: true, cudaGraph: true },
+    settings: { conf: 0.25, iou: 0.7, mode: 'wgc', overlay: true, cudaGraph: true, gpuRealtime: false },
     windows: [], monitors: [], models: [], stats: null, history: [],
   };
 
@@ -298,7 +298,8 @@
     document.querySelectorAll('.segmented button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.mode === s.mode)));
     $('st-overlay').setAttribute('aria-checked', String(s.overlay));
     $('st-graph').setAttribute('aria-checked', String(s.cudaGraph));
-    $('st-sub').textContent = `置信度 ${nf(2).format(s.conf)} · IoU ${nf(2).format(s.iou)} · ${s.mode === 'dd' ? '桌面复制' : 'WGC'} · 覆盖层${s.overlay ? '开' : '关'} · CUDA Graph ${s.cudaGraph ? '开' : '关'}`;
+    $('st-realtime').setAttribute('aria-checked', String(!!s.gpuRealtime));
+    $('st-sub').textContent = `置信度 ${nf(2).format(s.conf)} · IoU ${nf(2).format(s.iou)} · ${s.mode === 'dd' ? '桌面复制' : 'WGC'} · 覆盖层${s.overlay ? '开' : '关'} · CUDA Graph ${s.cudaGraph ? '开' : '关'}${s.gpuRealtime ? ' · GPU 实时优先级' : ''}`;
   }
 
   let savedTimer = 0;
@@ -352,6 +353,7 @@
   document.querySelectorAll('.segmented button').forEach((b) => b.addEventListener('click', () => saveSettings({ mode: b.dataset.mode })));
   $('st-overlay').addEventListener('click', () => saveSettings({ overlay: !state.settings.overlay }));
   $('st-graph').addEventListener('click', () => saveSettings({ cudaGraph: !state.settings.cudaGraph }));
+  $('st-realtime').addEventListener('click', () => saveSettings({ gpuRealtime: !state.settings.gpuRealtime }));
   window.addEventListener('hashchange', route);
   window.addEventListener('resize', () => { if (!$('view-overview').hidden) renderLatencyChart(); });
 

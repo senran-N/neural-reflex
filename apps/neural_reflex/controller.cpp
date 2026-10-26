@@ -112,12 +112,14 @@ void Controller::OnMessage(const std::string& text, HWND owner) {
       const json& s = msg.at("settings");
       const bool restart = session_.Active() && (s.value("mode", settings_.mode) != settings_.mode ||
                                                  s.value("overlay", settings_.overlay) != settings_.overlay ||
-                                                 s.value("cudaGraph", settings_.cudaGraph) != settings_.cudaGraph);
+                                                 s.value("cudaGraph", settings_.cudaGraph) != settings_.cudaGraph ||
+                                                 s.value("gpuRealtime", settings_.gpuRealtime) != settings_.gpuRealtime);
       settings_.conf = std::clamp(s.value("conf", settings_.conf), 0.01f, 0.99f);
       settings_.iou = std::clamp(s.value("iou", settings_.iou), 0.05f, 0.95f);
       settings_.mode = s.value("mode", settings_.mode) == "dd" ? "dd" : "wgc";
       settings_.overlay = s.value("overlay", settings_.overlay);
       settings_.cudaGraph = s.value("cudaGraph", settings_.cudaGraph);
+      settings_.gpuRealtime = s.value("gpuRealtime", settings_.gpuRealtime);
       session_.SetThresholds(settings_.conf, settings_.iou);
       SaveSettings();
       if (restart) Start();
@@ -162,6 +164,7 @@ void Controller::Start() {
   config.detector.confThreshold = settings_.conf;
   config.detector.iouThreshold = settings_.iou;
   config.overlay = settings_.overlay;
+  config.gpuPriority = settings_.gpuRealtime ? GpuPriority::kRealtime : GpuPriority::kNormal;
   lastSentSecond_ = -1;
   session_.Start(config);
   lastPhase_ = SessionPhase::kPreparing;
@@ -300,7 +303,8 @@ void Controller::SendState() {
         {"iou", settings_.iou},
         {"mode", settings_.mode},
         {"overlay", settings_.overlay},
-        {"cudaGraph", settings_.cudaGraph}}},
+        {"cudaGraph", settings_.cudaGraph},
+        {"gpuRealtime", settings_.gpuRealtime}}},
       {"gpu", gpuName_},
   };
   send_(state.dump());
@@ -411,6 +415,7 @@ void Controller::LoadSettings() {
     settings_.mode = j.value("mode", settings_.mode);
     settings_.overlay = j.value("overlay", settings_.overlay);
     settings_.cudaGraph = j.value("cudaGraph", settings_.cudaGraph);
+    settings_.gpuRealtime = j.value("gpuRealtime", settings_.gpuRealtime);
     settings_.lastTargetExe = FromUtf8(j.value("lastTargetExe", std::string()));
   } catch (const std::exception&) {
   }
@@ -423,6 +428,7 @@ void Controller::SaveSettings() const {
                   {"mode", settings_.mode},
                   {"overlay", settings_.overlay},
                   {"cudaGraph", settings_.cudaGraph},
+                  {"gpuRealtime", settings_.gpuRealtime},
                   {"lastTargetExe", ToUtf8(settings_.lastTargetExe)}};
   std::ofstream f(dataDir_ / "settings.json");
   f << j.dump(2);

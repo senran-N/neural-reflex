@@ -32,6 +32,7 @@ struct AppSettings {
   std::string mode = "wgc";  // wgc | dd
   bool overlay = true;
   bool cudaGraph = true;
+  bool gpuRealtime = false;  // 进程 GPU 调度优先级设为实时级（设计方案 6.4）
   std::wstring lastTargetExe;
 };
 
