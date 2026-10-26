@@ -1,6 +1,6 @@
 # neural-reflex
 
-Windows 实时视觉检测软件。设计见 [docs/performance-design.md](docs/performance-design.md)。
+Windows 实时视觉检测软件。设计见 [docs/performance-design.md](docs/performance-design.md)，扩展机制（模型适配、结果共享）见 [docs/plugin-design.md](docs/plugin-design.md)。
 
 当前进度：完整链路已打通（采集 → D3D11/CUDA 交接 → GPU 预处理 → TensorRT for RTX → GPU NMS → 覆盖层），并提供桌面程序 `NeuralReflex.exe`。
 
@@ -24,13 +24,15 @@ cmake --install build --config Release --prefix dist/NeuralReflex
 | `src/capture` | Windows.Graphics.Capture（窗口 / 显示器）与 DXGI Desktop Duplication |
 | `src/overlay` | DirectComposition 透明覆盖层，可等待交换链，最大帧延迟 1 |
 | `apps/neural_reflex` | 桌面程序：WebView2 界面宿主、目标枚举、设置持久化 |
-| `src/pipeline` | 检测会话：工作线程、覆盖层线程、每秒统计 |
-| `src/inference` | D3D11/CUDA 交接、GPU 预处理与后处理、TensorRT for RTX 引擎 |
+| `src/pipeline` | 检测会话：工作线程、覆盖层线程、每秒统计；结果发布到共享内存 |
+| `src/inference` | D3D11/CUDA 交接、GPU 预处理、TensorRT for RTX 引擎、模型清单与输出解码器 |
 | `ui` | 界面（HTML/CSS/JS）；在浏览器中直接打开时使用示例数据 |
 | `apps/nr_detect` | 命令行检测：实时模式，或 `--image-list` 离线模式用于与 Python 参考对比 |
 | `apps/nr_probe` | 链路探针：采集测试源 → 解码帧标签 → 覆盖层画框，并统计延迟 |
 | `tools/nr_testsource` | 合成测试源：移动目标 + 左上角帧标签（帧号、生成时刻、目标框） |
-| `tools/model_export` | 参考模型（YOLO26n）导出为 ONNX 并记录输入输出契约 |
+| `tools/model_export` | 模型导出为 ONNX 并写出模型清单；Python 参考流水线与精度对比 |
+| `tools/results` | 结果共享的读取示例（只依赖 Python 标准库） |
+| `tools/bench`、`tools/nr_gpuload` | 并行负载下的检测测量与可控 GPU 负载 |
 
 ## 构建
 
@@ -62,7 +64,17 @@ cd models/reference
 tensorrt_rtx.exe --onnx=yolo26n-640-nms-fp32.onnx --saveEngine=yolo26n-640-nms-fp32.engine
 ```
 
+导出脚本同时写出模型清单（同名 `.json`）：解码器、类别名、关键点等。`--weights yolo26n-pose.pt` 导出姿态模型，`--end2end` 导出无 NMS 的端到端头。目前支持的解码器为 `yolo-anchors`、`yolo-end2end`、`yolo-pose-anchors`（扩展机制方案 4.4）。
+
 模型、引擎和缓存不入库（体积大，且引擎与设备、驱动绑定）。Ultralytics 权重为 AGPL-3.0。
+
+## 结果共享
+
+桌面程序“设置 → 结果共享”或 `nr_detect --publish` 开启后，每帧结果写入共享内存 `Local\NeuralReflex.Results.v1`，任意语言的程序都可读取，布局见扩展机制方案 5.2。示例：
+
+```
+python tools/results/read_results.py --print
+```
 
 ## 开发环境（本机）
 
