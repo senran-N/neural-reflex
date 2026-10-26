@@ -21,6 +21,9 @@ struct ModelInfo {
   int inputSize = 0;
   std::string precision;  // FP16 / FP32 / INT8，未知为空
   std::string head;
+  std::string decoder;      // 解码器名称；清单未声明且没有记录输出形状时为空，启动时再确定
+  std::string unsupported;  // 非空时为不能使用的原因
+  int numKeypoints = 0;
   std::map<int, std::string> classNames;
   bool engineCached = false;
 };
@@ -33,6 +36,7 @@ struct AppSettings {
   bool overlay = true;
   bool cudaGraph = true;
   bool gpuRealtime = false;  // 进程 GPU 调度优先级设为实时级（设计方案 6.4）
+  bool publishResults = false;  // 结果写入共享内存（扩展机制方案第 5 节）
   std::wstring lastTargetExe;
 };
 

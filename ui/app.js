@@ -17,7 +17,7 @@
 
   const state = {
     phase: 'idle', error: '', target: { kind: 'none' }, model: null, gpu: '',
-    settings: { conf: 0.25, iou: 0.7, mode: 'wgc', overlay: true, cudaGraph: true, gpuRealtime: false },
+    settings: { conf: 0.25, iou: 0.7, mode: 'wgc', overlay: true, cudaGraph: true, gpuRealtime: false, publishResults: false },
     windows: [], monitors: [], models: [], stats: null, history: [],
   };
 
@@ -197,10 +197,20 @@
     $('tg-kv').innerHTML = kv.map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join('');
   }
 
+  // 解码器说明（扩展机制方案 4.4）；清单未声明解码器时退回导出脚本记录的检测头说明
+  function headLabel(m, short) {
+    switch (m.decoder) {
+      case 'yolo-anchors': return short ? '一对多 + GPU NMS' : '一对多检测头 · GPU NMS';
+      case 'yolo-end2end': return short ? '端到端（无 NMS）' : '端到端检测头 · 无 NMS';
+      case 'yolo-pose-anchors': return `姿态 · ${m.keypoints} 个关键点 · GPU NMS`;
+      default: return m.head && m.head.includes('NMS') ? (short ? '一对多 + GPU NMS' : '一对多检测头 · GPU NMS') : m.head || '—';
+    }
+  }
+
   function renderModelCard() {
     const m = state.model;
     $('md-name').textContent = m ? m.name : '未加载';
-    $('md-sub').textContent = m ? (m.head.includes('NMS') ? '一对多检测头 · GPU NMS' : m.head || '—') : '—';
+    $('md-sub').textContent = m ? headLabel(m, false) : '—';
     const classes = m ? Object.keys(m.classes || {}).length : 0;
     const kv = m
       ? [['精度', m.precision || '—'], ['输入', m.inputSize ? `${m.inputSize} × ${m.inputSize}` : '—'], ['类别', classes ? `${classes} 类` : '—'],
@@ -264,7 +274,7 @@
     $('md-h1-sub').textContent = m ? `当前：${m.name} · ${m.precision || '精度未知'} · ${state.models.length} 个可用` : `${state.models.length} 个可用模型`;
     $('mdc-path').textContent = m ? m.path : '—';
     $('mdc-in').textContent = m && m.inputSize ? `1 × 3 × ${m.inputSize} × ${m.inputSize}` : '—';
-    $('mdc-head').textContent = m ? (m.head.includes('NMS') ? '一对多 + GPU NMS' : m.head || '—') : '—';
+    $('mdc-head').textContent = m ? headLabel(m, true) : '—';
     $('mdc-engine').textContent = m ? (m.engineCached ? '已缓存' : '首次运行时编译') : '—';
     const classes = m ? Object.entries(m.classes || {}).sort((a, b) => a[0] - b[0]) : [];
     $('mdc-classes-title').textContent = classes.length ? `类别（${classes.length}）` : '类别';
@@ -280,7 +290,7 @@
     $('mdl-rows').innerHTML = state.models.map((x) => {
       const selected = m && x.path === m.path;
       if (x.supported === false) {
-        return `<tr><td class="name"><span>${esc(x.name)}</span><div class="muted" style="font-size:12px;line-height:16px">端到端检测头，暂不支持</div></td>
+        return `<tr><td class="name"><span>${esc(x.name)}</span><div class="muted" style="font-size:12px;line-height:16px">${esc(x.unsupported || '不支持')}</div></td>
         <td class="num muted">${esc(x.precision || '—')}</td><td class="num muted">${nf(1).format(x.sizeBytes / 1048576)}<span class="unit">MB</span></td></tr>`;
       }
       return `<tr data-model="${esc(x.path)}" aria-selected="${selected}" style="cursor:pointer"><td class="name"><span class="cell-object"><span>${esc(x.name)}</span></span>${where(x)}</td>
@@ -299,7 +309,8 @@
     $('st-overlay').setAttribute('aria-checked', String(s.overlay));
     $('st-graph').setAttribute('aria-checked', String(s.cudaGraph));
     $('st-realtime').setAttribute('aria-checked', String(!!s.gpuRealtime));
-    $('st-sub').textContent = `置信度 ${nf(2).format(s.conf)} · IoU ${nf(2).format(s.iou)} · ${s.mode === 'dd' ? '桌面复制' : 'WGC'} · 覆盖层${s.overlay ? '开' : '关'} · CUDA Graph ${s.cudaGraph ? '开' : '关'}${s.gpuRealtime ? ' · GPU 实时优先级' : ''}`;
+    $('st-publish').setAttribute('aria-checked', String(!!s.publishResults));
+    $('st-sub').textContent = `置信度 ${nf(2).format(s.conf)} · IoU ${nf(2).format(s.iou)} · ${s.mode === 'dd' ? '桌面复制' : 'WGC'} · 覆盖层${s.overlay ? '开' : '关'} · CUDA Graph ${s.cudaGraph ? '开' : '关'}${s.gpuRealtime ? ' · GPU 实时优先级' : ''}${s.publishResults ? ' · 结果共享' : ''}`;
   }
 
   let savedTimer = 0;
@@ -354,6 +365,7 @@
   $('st-overlay').addEventListener('click', () => saveSettings({ overlay: !state.settings.overlay }));
   $('st-graph').addEventListener('click', () => saveSettings({ cudaGraph: !state.settings.cudaGraph }));
   $('st-realtime').addEventListener('click', () => saveSettings({ gpuRealtime: !state.settings.gpuRealtime }));
+  $('st-publish').addEventListener('click', () => saveSettings({ publishResults: !state.settings.publishResults }));
   window.addEventListener('hashchange', route);
   window.addEventListener('resize', () => { if (!$('view-overview').hidden) renderLatencyChart(); });
 

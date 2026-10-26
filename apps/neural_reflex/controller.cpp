@@ -113,13 +113,15 @@ void Controller::OnMessage(const std::string& text, HWND owner) {
       const bool restart = session_.Active() && (s.value("mode", settings_.mode) != settings_.mode ||
                                                  s.value("overlay", settings_.overlay) != settings_.overlay ||
                                                  s.value("cudaGraph", settings_.cudaGraph) != settings_.cudaGraph ||
-                                                 s.value("gpuRealtime", settings_.gpuRealtime) != settings_.gpuRealtime);
+                                                 s.value("gpuRealtime", settings_.gpuRealtime) != settings_.gpuRealtime ||
+                                                 s.value("publishResults", settings_.publishResults) != settings_.publishResults);
       settings_.conf = std::clamp(s.value("conf", settings_.conf), 0.01f, 0.99f);
       settings_.iou = std::clamp(s.value("iou", settings_.iou), 0.05f, 0.95f);
       settings_.mode = s.value("mode", settings_.mode) == "dd" ? "dd" : "wgc";
       settings_.overlay = s.value("overlay", settings_.overlay);
       settings_.cudaGraph = s.value("cudaGraph", settings_.cudaGraph);
       settings_.gpuRealtime = s.value("gpuRealtime", settings_.gpuRealtime);
+      settings_.publishResults = s.value("publishResults", settings_.publishResults);
       session_.SetThresholds(settings_.conf, settings_.iou);
       SaveSettings();
       if (restart) Start();
@@ -142,6 +144,7 @@ void Controller::OnTimer() {
     model_.engineCached = std::filesystem::exists(dataDir_ / "engines" / (model_.path.stem().string() + ".engine"));
     SendState();
     if (s.phase == SessionPhase::kFailed) Toast("error", s.error);
+    if (s.phase == SessionPhase::kRunning && !s.publishError.empty()) Toast("warning", "结果共享未开启：" + s.publishError);
   }
   if (s.phase == SessionPhase::kRunning || s.phase == SessionPhase::kPreparing) SendStats();
 }
@@ -165,6 +168,7 @@ void Controller::Start() {
   config.detector.iouThreshold = settings_.iou;
   config.overlay = settings_.overlay;
   config.gpuPriority = settings_.gpuRealtime ? GpuPriority::kRealtime : GpuPriority::kNormal;
+  config.publishResults = settings_.publishResults;
   lastSentSecond_ = -1;
   session_.Start(config);
   lastPhase_ = SessionPhase::kPreparing;
@@ -225,28 +229,19 @@ ModelInfo Controller::ReadModel(const std::filesystem::path& path) const {
                                                           : "";
   m.engineCached = std::filesystem::exists(dataDir_ / "engines" / (path.stem().string() + ".engine"));
 
-  // 导出脚本写的输入输出契约；低精度版本沿用 FP32 版本的契约
-  std::vector<std::filesystem::path> candidates = {path.parent_path() / (path.stem().string() + ".json")};
-  for (const char* p : {"fp16", "int8", "fp8"}) {
-    std::string s = path.stem().string();
-    if (const auto pos = Lower(s).find(p); pos != std::string::npos) {
-      s.replace(pos, std::strlen(p), "fp32");
-      candidates.push_back(path.parent_path() / (s + ".json"));
+  // 模型清单（扩展机制方案 4.1）；与检测会话使用同一套查找与解码器推断规则
+  try {
+    const ModelManifest manifest = LoadModelManifest(path);
+    m.inputSize = manifest.imgsz;
+    m.head = manifest.head;
+    m.classNames = manifest.classNames;
+    m.numKeypoints = manifest.numKeypoints;
+    CheckSupportedPreprocess(manifest);
+    if (!manifest.decoder.empty() || !manifest.outputShape.empty()) {
+      m.decoder = ResolveDecoderName(manifest, manifest.outputShape);
     }
-  }
-  for (const auto& c : candidates) {
-    std::ifstream f(c);
-    if (!f) continue;
-    try {
-      const json j = json::parse(f);
-      m.inputSize = j.value("imgsz", 0);
-      m.head = j.value("head", "");
-      if (j.contains("class_names")) {
-        for (const auto& [k, v] : j["class_names"].items()) m.classNames[std::stoi(k)] = v.get<std::string>();
-      }
-      break;
-    } catch (const std::exception&) {
-    }
+  } catch (const std::exception& e) {
+    m.unsupported = e.what();
   }
   return m;
 }
@@ -290,6 +285,7 @@ void Controller::SendState() {
   if (!model_.path.empty()) {
     model = {{"path", ToUtf8(model_.path.wstring())}, {"name", model_.name},     {"sizeBytes", model_.sizeBytes},
              {"inputSize", model_.inputSize},         {"precision", model_.precision}, {"head", model_.head},
+             {"decoder", model_.decoder},             {"keypoints", model_.numKeypoints},
              {"classes", classes},                    {"engineCached", model_.engineCached}};
   }
   const json state = {
@@ -304,7 +300,8 @@ void Controller::SendState() {
         {"mode", settings_.mode},
         {"overlay", settings_.overlay},
         {"cudaGraph", settings_.cudaGraph},
-        {"gpuRealtime", settings_.gpuRealtime}}},
+        {"gpuRealtime", settings_.gpuRealtime},
+        {"publishResults", settings_.publishResults}}},
       {"gpu", gpuName_},
   };
   send_(state.dump());
@@ -348,8 +345,10 @@ void Controller::SendModels() {
                      {"inputSize", m.inputSize},
                      {"classCount", m.classNames.size()},
                      {"engineCached", m.engineCached},
-                     // 端到端检测头（无 NMS）暂不支持，界面中标明且不可选
-                     {"supported", m.head.find("end2end") == std::string::npos}});
+                     {"decoder", m.decoder},
+                     {"keypoints", m.numKeypoints},
+                     {"supported", m.unsupported.empty()},
+                     {"unsupported", m.unsupported}});
   }
   send_(json{{"type", "models"}, {"items", items}}.dump());
 }
@@ -416,6 +415,7 @@ void Controller::LoadSettings() {
     settings_.overlay = j.value("overlay", settings_.overlay);
     settings_.cudaGraph = j.value("cudaGraph", settings_.cudaGraph);
     settings_.gpuRealtime = j.value("gpuRealtime", settings_.gpuRealtime);
+    settings_.publishResults = j.value("publishResults", settings_.publishResults);
     settings_.lastTargetExe = FromUtf8(j.value("lastTargetExe", std::string()));
   } catch (const std::exception&) {
   }
@@ -429,6 +429,7 @@ void Controller::SaveSettings() const {
                   {"overlay", settings_.overlay},
                   {"cudaGraph", settings_.cudaGraph},
                   {"gpuRealtime", settings_.gpuRealtime},
+                  {"publishResults", settings_.publishResults},
                   {"lastTargetExe", ToUtf8(settings_.lastTargetExe)}};
   std::ofstream f(dataDir_ / "settings.json");
   f << j.dump(2);

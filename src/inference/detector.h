@@ -1,7 +1,9 @@
 #pragma once
 
 #include "inference/d3d_cuda_interop.h"
+#include "inference/decoder.h"
 #include "inference/letterbox.h"
+#include "inference/model_manifest.h"
 #include "inference/postprocess.h"
 #include "inference/trt_engine.h"
 
@@ -23,7 +25,8 @@ struct StageTimes {
   float preprocessMs = 0, inferenceMs = 0, postprocessMs = 0;  // GPU 事件计时
 };
 
-// 检测流水线：检测区域复制进共享纹理 → fence → CUDA 预处理 → 推理 → 后处理 → 回读结果。
+// 检测流水线：检测区域复制进共享纹理 → fence → CUDA 预处理 → 推理 → 解码器 → 回读结果。
+// 模型清单与解码器在构造时确定（扩展机制方案 4.1、4.3）。
 // 提交与取结果分开，最多 kSlots 帧在途（设计方案 6.1）：GPU 处理第 N 帧时，第 N+1 帧
 // 的采集与复制已可进行。GPU 上所有工作在同一个 stream 中按序执行。
 // Submit 只能在调用方独占的 D3D 即时上下文所在线程调用；Wait 可在另一个线程调用。
@@ -49,12 +52,15 @@ class Detector {
                              float offsetX, float offsetY);
 
   int InputSize() const { return inputSize_; }
-  int NumClasses() const { return post_.numClasses; }
+  int NumClasses() const { return decoder_->NumClasses(); }
+  int NumKeypoints() const { return decoder_->NumKeypoints(); }
+  const char* DecoderName() const { return decoder_->Name(); }
+  const ModelManifest& Manifest() const { return manifest_; }
 
   // 下一次 Submit 起生效
   void SetThresholds(float conf, float iou) {
-    post_.confThreshold = conf;
-    post_.iouThreshold = iou;
+    decode_.confThreshold = conf;
+    decode_.iouThreshold = iou;
   }
 
   // 调试用：读回最近一次的模型输入张量
@@ -72,12 +78,14 @@ class Detector {
 
   ID3D11Device* device_;
   DetectorOptions options_;
+  ModelManifest manifest_;
   std::unique_ptr<TrtEngine> engine_;
+  std::unique_ptr<OutputDecoder> decoder_;
   std::unique_ptr<SharedFence> fence_;
   cudaStream_t stream_ = nullptr;
   std::array<Slot, kSlots> slots_;
-  PostprocessBuffers buffers_;
-  PostprocessParams post_;
+  DetectionOutput* deviceOutput_ = nullptr;  // 解码器写入，各槽位按序回读
+  DecodeParams decode_;
   int inputSize_ = 0;
 };
 

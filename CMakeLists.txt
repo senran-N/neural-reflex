@@ -64,13 +64,17 @@ if(NR_ENABLE_CUDA)
     src/inference/trt_engine.cpp
     src/inference/preprocess.cu
     src/inference/postprocess.cu
+    src/inference/model_manifest.cpp
+    src/inference/decoder.cpp
     src/inference/detector.cpp
   )
+  target_include_directories(nr_inference PRIVATE third_party)
   target_compile_options(nr_inference PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/utf-8>)
   target_link_libraries(nr_inference PUBLIC nr_common CUDA::cudart_static TRTRTX::tensorrt
                                             TRTRTX::nvonnxparser)
 
-  add_library(nr_pipeline STATIC src/pipeline/session.cpp)
+  add_library(nr_pipeline STATIC src/pipeline/session.cpp src/pipeline/result_publisher.cpp)
+  target_include_directories(nr_pipeline PRIVATE third_party)
   target_link_libraries(nr_pipeline PUBLIC nr_inference nr_capture nr_overlay avrt)
 
   add_executable(nr_detect apps/nr_detect/main.cpp)

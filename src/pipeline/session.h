@@ -34,6 +34,8 @@ struct SessionConfig {
   int inflight = 1;  // 同时在 GPU 上的帧数，1 或 2
   GpuPriority gpuPriority = GpuPriority::kNormal;
   bool mmcss = false;  // 采集与完成线程注册为 MMCSS "Games" 任务
+
+  bool publishResults = false;  // 每帧结果写入共享内存供其他进程读取（扩展机制方案第 5 节）
 };
 
 enum class SessionPhase { kIdle, kPreparing, kRunning, kFailed };
@@ -59,6 +61,10 @@ struct SessionSnapshot {
   std::string adapter;  // UTF-8
   int inputSize = 0;
   int numClasses = 0;
+  int numKeypoints = 0;
+  std::string decoder;  // 解码器名称（扩展机制方案 4.4）
+  bool publishing = false;
+  std::string publishError;  // 请求发布但未能发布的原因，UTF-8
   uint64_t detections = 0;
   Percentiles latency, pre, infer, post;  // 整个会话
   uint64_t overflowFrames = 0;

@@ -9,8 +9,10 @@
 #include "inference/d3d_cuda_interop.h"
 #include "inference/cuda_check.h"
 #include "overlay/overlay.h"
+#include "pipeline/result_publisher.h"
 
 #include <avrt.h>
+#include <nlohmann/json.hpp>
 
 #include <unknwn.h>
 #include <winrt/base.h>
@@ -19,6 +21,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <exception>
+#include <functional>
 #include <iterator>
 #include <memory>
 
@@ -26,10 +29,20 @@ namespace nr {
 namespace {
 
 constexpr size_t kMaxSeconds = 600;
+constexpr float kKeypointMinScore = 0.25f;  // 关键点显示阈值，与 Ultralytics 绘图缺省值一致
+constexpr float kKeypointSize = 5.0f;
+// 每个框 4 个矩形，每个关键点 1 个
+constexpr size_t kOverlayMaxRects = static_cast<size_t>(kMaxDetections) * (4 + kMaxKeypoints);
+
+struct OverlayPoint {
+  float x, y;
+  int cls;
+};
 
 struct OverlayFrame {
   std::vector<RECT> boxes;
   std::vector<int> classes;
+  std::vector<OverlayPoint> points;
   int64_t acquireQpc = 0;
 };
 
@@ -52,7 +65,7 @@ void OverlayLoop(IDXGIAdapter1* adapter, RECT screenRect, const LatestSlot<Overl
                  std::atomic<bool>& failed, std::string& error) {
   SetCurrentThreadName(L"nr-overlay");
   try {
-    Overlay overlay(adapter, screenRect);
+    Overlay overlay(adapter, screenRect, kOverlayMaxRects);
     HANDLE waitable = overlay.FrameWaitable();
     uint64_t seen = 0;
     OverlayFrame current;
@@ -77,6 +90,11 @@ void OverlayLoop(IDXGIAdapter1* adapter, RECT screenRect, const LatestSlot<Overl
           AppendOutline(rects, static_cast<float>(b.left), static_cast<float>(b.top),
                         static_cast<float>(b.right - b.left), static_cast<float>(b.bottom - b.top), 2.0f, c[0],
                         c[1], c[2], 1.0f);
+        }
+        for (const OverlayPoint& p : current.points) {
+          const float* c = kPalette[static_cast<size_t>(p.cls) % std::size(kPalette)];
+          rects.push_back({p.x - kKeypointSize / 2, p.y - kKeypointSize / 2, kKeypointSize, kKeypointSize, c[0], c[1],
+                           c[2], 1.0f});
         }
       }
       overlay.Present(rects);
@@ -156,7 +174,28 @@ namespace {
 struct InFlight {
   int slot = 0;
   int64_t acquireQpc = 0;
+  RECT region{};  // 检测区域，屏幕物理像素
 };
+
+// 发布给读取方的会话元数据（扩展机制方案 5.2）
+std::string SessionMetadata(const Detector& detector, const SessionConfig& config, int64_t sessionId,
+                            const char* state) {
+  const ModelManifest& m = detector.Manifest();
+  nlohmann::json classes = nlohmann::json::object();
+  for (const auto& [k, v] : m.classNames) classes[std::to_string(k)] = v;
+  nlohmann::json j = {{"layout", kResultsLayoutVersion},
+                      {"session", sessionId},
+                      {"state", state},
+                      {"pid", GetCurrentProcessId()},
+                      {"model", Utf8(config.detector.engine.onnx.stem().wstring())},
+                      {"decoder", detector.DecoderName()},
+                      {"inputSize", detector.InputSize()},
+                      {"numClasses", detector.NumClasses()},
+                      {"classNames", classes},
+                      {"keypoints",
+                       {{"count", detector.NumKeypoints()}, {"names", m.keypointNames}, {"skeleton", m.skeleton}}}};
+  return j.dump();
+}
 
 class MmcssScope {
  public:
@@ -243,6 +282,24 @@ void Session::Run(SessionConfig config) {
       source = CreateWgcMonitorCapture(device.Get(), monitor);
     }
 
+    // 结果发布失败不影响检测，原因显示在界面中
+    std::unique_ptr<ResultPublisher> publisher;
+    const int64_t sessionId = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                  std::chrono::system_clock::now().time_since_epoch())
+                                  .count();
+    if (config.publishResults) {
+      try {
+        publisher = std::make_unique<ResultPublisher>();
+        publisher->PublishMetadata(SessionMetadata(detector, config, sessionId, "running"));
+      } catch (const std::exception& e) {
+        publisher.reset();
+        std::lock_guard lock(mutex_);
+        state_.publishError = e.what();
+      }
+      std::lock_guard lock(mutex_);
+      state_.publishing = publisher != nullptr;
+    }
+
     LatestSlot<OverlayFrame> overlaySlot;
     if (config.overlay) {
       overlayThread = std::thread(OverlayLoop, adapter.adapter.Get(), mi.rcMonitor, std::cref(overlaySlot),
@@ -255,6 +312,20 @@ void Session::Run(SessionConfig config) {
     std::vector<double> secLatency, secPre, secInfer, secPost;
     double secBoxes = 0;
 
+    // 两个线程按引用使用本作用域内的对象（检测器、覆盖层交接、统计、发布）。异常离开本作用域时，
+    // 这些对象在进入 catch 之前就已析构，因此在这里先结束线程，再标记发布结束。
+    struct ScopeExit {
+      std::function<void()> f;
+      ~ScopeExit() { f(); }
+    } joinThreads{[&] {
+      shutdown();
+      try {
+        if (publisher) publisher->PublishMetadata(SessionMetadata(detector, config, sessionId, "stopped"));
+      } catch (const std::exception&) {
+        // 析构路径上不能抛出；元数据保持 running，读取方可由 pid 判断宿主已退出
+      }
+    }};
+
     // 完成线程：按提交顺序等待结果并发布，不阻塞采集
     completionThread = std::thread([&] {
       SetCurrentThreadName(L"nr-complete");
@@ -262,6 +333,7 @@ void Session::Run(SessionConfig config) {
       try {
         CudaCheck(cudaSetDevice(cudaDevice), "cudaSetDevice");
         OverlayFrame frameOut;
+        uint64_t frameIndex = 0;
         for (;;) {
           InFlight item;
           {
@@ -273,10 +345,14 @@ void Session::Run(SessionConfig config) {
           }
           StageTimes t;
           const DetectionOutput& r = detector.Wait(item.slot, &t);
-          const double ms = QpcToMs(QpcNow() - item.acquireQpc);
+          const int64_t doneQpc = QpcNow();
+          const double ms = QpcToMs(doneQpc - item.acquireQpc);
+          if (publisher) publisher->Publish({frameIndex, item.acquireQpc, doneQpc, item.region}, r);
+          ++frameIndex;
 
           frameOut.boxes.clear();
           frameOut.classes.clear();
+          frameOut.points.clear();
           std::map<int, int> classes;
           for (int i = 0; i < r.count; ++i) {
             const Detection& d = r.detections[i];
@@ -284,6 +360,10 @@ void Session::Run(SessionConfig config) {
                                       static_cast<LONG>(d.y2)});
             frameOut.classes.push_back(d.cls);
             ++classes[d.cls];
+            for (int j = 0; j < r.numKeypoints; ++j) {
+              const Keypoint& k = r.keypoints[i * r.numKeypoints + j];
+              if (k.score >= kKeypointMinScore) frameOut.points.push_back({k.x, k.y, d.cls});
+            }
           }
           frameOut.acquireQpc = item.acquireQpc;
           if (config.overlay) overlaySlot.Publish(frameOut);
@@ -327,6 +407,8 @@ void Session::Run(SessionConfig config) {
       state_.adapter = Utf8(adapter.name);
       state_.inputSize = detector.InputSize();
       state_.numClasses = detector.NumClasses();
+      state_.numKeypoints = detector.NumKeypoints();
+      state_.decoder = detector.DecoderName();
     }
     float conf = conf_, iou = iou_;
     const int64_t freq = QpcFrequency();
@@ -388,7 +470,9 @@ void Session::Run(SessionConfig config) {
           source->ReleaseFrame();
           {
             std::lock_guard lock(queueMutex);
-            queue.push_back({nextSlot, frame.acquireQpc});
+            const RECT screenRegion{origin.x, origin.y, origin.x + static_cast<LONG>(region.right - region.left),
+                                    origin.y + static_cast<LONG>(region.bottom - region.top)};
+            queue.push_back({nextSlot, frame.acquireQpc, screenRegion});
             ++inflight;
           }
           queueCv.notify_all();

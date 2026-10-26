@@ -6,7 +6,7 @@ window.NR_PREVIEW = (emit) => {
   const model = {
     path: 'D:\Myproject\neural-reflex\models\reference\yolo26n-640-nms-fp16.onnx',
     name: 'yolo26n-640-nms-fp16', sizeBytes: 5079119, inputSize: 640, precision: 'FP16',
-    head: 'one-to-many (needs NMS)', classes, engineCached: true,
+    head: 'one-to-many (needs NMS)', decoder: 'yolo-anchors', keypoints: 0, classes, engineCached: true,
   };
   const windows = [
     { hwnd: '1835362', title: 'NR Test Source - 144.0 FPS - 帧 8642', exe: 'nr_testsource.exe', pid: 41208, width: 1280, height: 720, minimized: false, icon: '' },
@@ -15,7 +15,7 @@ window.NR_PREVIEW = (emit) => {
     { hwnd: '1180244', title: 'TensorRT for RTX 文档 - Microsoft Edge', exe: 'msedge.exe', pid: 22716, width: 1536, height: 980, minimized: true, icon: '' },
   ];
   const monitors = [{ index: 0, width: 2560, height: 1600, refreshHz: 165, primary: true }];
-  const settings = { conf: 0.25, iou: 0.7, mode: 'wgc', overlay: true, cudaGraph: true, gpuRealtime: false };
+  const settings = { conf: 0.25, iou: 0.7, mode: 'wgc', overlay: true, cudaGraph: true, gpuRealtime: false, publishResults: false };
   let target = { kind: 'window', ...windows[0], icon: 'img/mark.svg', alive: true };
   let phase = 'running';
 
@@ -51,9 +51,9 @@ window.NR_PREVIEW = (emit) => {
         emit(stateMsg());
         emit({ type: 'targets', windows, monitors });
         emit({ type: 'models', items: [
-          { path: model.path, name: model.name, sizeBytes: model.sizeBytes, precision: 'FP16', inputSize: 640, classCount: 80, engineCached: true, supported: true },
-          { path: model.path.replace('fp16', 'fp32'), name: 'yolo26n-640-nms-fp32', sizeBytes: 9930306, precision: 'FP32', inputSize: 640, classCount: 80, engineCached: true, supported: true },
-          { path: model.path.replace('nms-fp16', 'e2e-fp32'), name: 'yolo26n-640-e2e-fp32', sizeBytes: 9942036, precision: 'FP32', inputSize: 640, classCount: 80, engineCached: false, supported: false },
+          { path: model.path, name: model.name, sizeBytes: model.sizeBytes, precision: 'FP16', inputSize: 640, classCount: 80, engineCached: true, supported: true, decoder: 'yolo-anchors' },
+          { path: model.path.replace('fp16', 'fp32'), name: 'yolo26n-640-nms-fp32', sizeBytes: 9930306, precision: 'FP32', inputSize: 640, classCount: 80, engineCached: true, supported: true, decoder: 'yolo-anchors' },
+          { path: model.path.replace('nms-fp16', 'e2e-fp32'), name: 'yolo26n-640-e2e-fp32', sizeBytes: 9942036, precision: 'FP32', inputSize: 640, classCount: 80, engineCached: false, supported: true, decoder: 'yolo-end2end' },
         ] });
         emit(stats(seconds));
       } else if (msg.cmd === 'refreshTargets') {

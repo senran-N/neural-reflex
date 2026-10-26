@@ -12,23 +12,21 @@ Detector::Detector(ID3D11Device* device, int cudaDevice, const DetectorOptions& 
   CudaCheck(cudaSetDevice(cudaDevice), "cudaSetDevice");
   CudaCheck(cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking), "cudaStreamCreate");
 
+  // 清单与预处理声明在构建引擎之前检查，避免为不支持的模型花时间编译
+  manifest_ = LoadModelManifest(options.engine.onnx);
+  CheckSupportedPreprocess(manifest_);
+
   engine_ = std::make_unique<TrtEngine>(options.engine);
   const TensorInfo& in = engine_->Input();
-  const TensorInfo& out = engine_->Output();
   if (in.shape.size() != 4 || in.shape[0] != 1 || in.shape[1] != 3 || in.shape[2] != in.shape[3]) {
     throw std::runtime_error("模型输入须为 [1, 3, S, S]");
   }
-  // 一对多检测头 [1, 4 + nc, N] 的候选数远多于通道数；端到端头 [1, 300, 6] 不满足，需明确拒绝
-  if (out.shape.size() != 3 || out.shape[0] != 1 || out.shape[1] <= 4 || out.shape[2] <= out.shape[1]) {
-    throw std::runtime_error("模型输出须为 [1, 4 + nc, N]（一对多检测头）；暂不支持端到端检测头");
-  }
   inputSize_ = static_cast<int>(in.shape[2]);
-  post_.numClasses = static_cast<int>(out.shape[1] - 4);
-  post_.numAnchors = static_cast<int>(out.shape[2]);
-  post_.confThreshold = options.confThreshold;
-  post_.iouThreshold = options.iouThreshold;
+  decoder_ = CreateDecoder(manifest_, engine_->Output().shape);
+  decode_.confThreshold = options.confThreshold;
+  decode_.iouThreshold = options.iouThreshold;
 
-  buffers_ = AllocatePostprocessBuffers(post_.numAnchors);
+  CudaCheck(cudaMalloc(&deviceOutput_, sizeof(DetectionOutput)), "cudaMalloc(结果)");
   for (Slot& s : slots_) {
     CudaCheck(cudaMallocHost(&s.host, sizeof(DetectionOutput)), "cudaMallocHost(结果)");
     for (auto& e : s.events) CudaCheck(cudaEventCreate(&e), "cudaEventCreate");
@@ -44,8 +42,9 @@ Detector::~Detector() {
     for (auto& e : s.events) if (e) cudaEventDestroy(e);
   }
   fence_.reset();
+  decoder_.reset();
   engine_.reset();
-  FreePostprocessBuffers(buffers_);
+  if (deviceOutput_) cudaFree(deviceOutput_);
   if (stream_) cudaStreamDestroy(stream_);
 }
 
@@ -67,24 +66,30 @@ int Detector::Submit(ID3D11DeviceContext* context, ID3D11Texture2D* source, cons
   const uint64_t ready = fence_->Next();
   fence_->D3DSignal(context, ready);
 
-  const LetterboxParams letterbox = ComputeLetterbox(static_cast<int>(w), static_cast<int>(h), inputSize_);
-  PostprocessParams post = post_;
-  post.offsetX = offsetX;
-  post.offsetY = offsetY;
+  DecodeParams decode = decode_;
+  decode.letterbox = ComputeLetterbox(static_cast<int>(w), static_cast<int>(h), inputSize_);
+  decode.offsetX = offsetX;
+  decode.offsetY = offsetY;
 
   fence_->CudaWait(stream_, ready);
   CudaCheck(cudaEventRecord(slot.events[0], stream_), "cudaEventRecord");
-  LaunchLetterbox(slot.texture->Cuda(), letterbox, static_cast<float*>(engine_->Input().device), stream_);
+  LaunchLetterbox(slot.texture->Cuda(), decode.letterbox, static_cast<float*>(engine_->Input().device), stream_);
   CudaCheck(cudaGetLastError(), "LetterboxKernel");
   slot.released = fence_->Next();
   fence_->CudaSignal(stream_, slot.released);
   CudaCheck(cudaEventRecord(slot.events[1], stream_), "cudaEventRecord");
   engine_->Enqueue(stream_);
   CudaCheck(cudaEventRecord(slot.events[2], stream_), "cudaEventRecord");
-  LaunchPostprocess(static_cast<const float*>(engine_->Output().device), post, letterbox, buffers_, stream_);
-  CudaCheck(cudaGetLastError(), "Postprocess");
-  CudaCheck(cudaMemcpyAsync(slot.host, buffers_.output, sizeof(DetectionOutput), cudaMemcpyDeviceToHost, stream_),
+  decoder_->Enqueue(static_cast<const float*>(engine_->Output().device), decode, deviceOutput_, stream_);
+  CudaCheck(cudaGetLastError(), "解码器");
+  CudaCheck(cudaMemcpyAsync(slot.host, deviceOutput_, kDetectionOutputHeadBytes, cudaMemcpyDeviceToHost, stream_),
             "cudaMemcpyAsync(结果)");
+  if (const int k = decoder_->NumKeypoints(); k > 0) {
+    CudaCheck(cudaMemcpyAsync(slot.host->keypoints, deviceOutput_->keypoints,
+                              sizeof(Keypoint) * kMaxDetections * static_cast<size_t>(k), cudaMemcpyDeviceToHost,
+                              stream_),
+              "cudaMemcpyAsync(关键点)");
+  }
   CudaCheck(cudaEventRecord(slot.events[3], stream_), "cudaEventRecord");
   return slotIndex;
 }

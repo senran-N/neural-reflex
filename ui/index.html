@@ -213,6 +213,16 @@
           </div>
         </div>
       </div>
+
+      <div class="setting-row">
+        <div><h2>结果共享</h2><p class="desc">让其他程序读取每帧检测结果，用于告警、记录或联动。切换后运行中的会话会重新启动。</p></div>
+        <div class="panel">
+          <div class="switch-row">
+            <div><div class="title">发布到共享内存</div><div class="desc">写入 Local\NeuralReflex.Results.v1，任意语言均可读取；读取示例见 tools/results/read_results.py。同一时间只有一个进程能发布。</div></div>
+            <button class="switch" type="button" role="switch" id="st-publish" aria-checked="false" aria-label="发布到共享内存"></button>
+          </div>
+        </div>
+      </div>
     </section>
   </main>
 </div>

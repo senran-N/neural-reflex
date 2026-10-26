@@ -8,6 +8,8 @@
 #include "common/win_util.h"
 #include "inference/d3d_cuda_interop.h"
 #include "inference/detector.h"
+#include "common/qpc.h"
+#include "pipeline/result_publisher.h"
 #include "pipeline/session.h"
 
 #include <cuda_runtime.h>
@@ -41,6 +43,7 @@ struct Options {
   std::wstring windowTitle;  // 空则使用合成测试源
   double duration = 30;
   bool overlay = true;
+  bool publish = false;  // 结果写入共享内存（扩展机制方案第 5 节）
   // 调度实验项
   int inflight = 1;
   nr::GpuPriority gpuPriority = nr::GpuPriority::kNormal;
@@ -53,8 +56,8 @@ void PrintUsage() {
   std::fwprintf(stderr,
                 L"用法：\n"
                 L"  nr_detect [--model x.onnx] [--conf 0.25] [--iou 0.7] [--no-cuda-graph]\n"
-                L"            [--mode wgc|dd] [--window 标题] [--duration 秒] [--no-overlay]\n"
-                L"  nr_detect --image-list 列表.txt --json 结果.jsonl [--dump-dir 目录]\n");
+                L"            [--mode wgc|dd] [--window 标题] [--duration 秒] [--no-overlay] [--publish]\n"
+                L"  nr_detect --image-list 列表.txt --json 结果.jsonl [--dump-dir 目录] [--publish]\n");
 }
 
 bool ParseOptions(int argc, wchar_t** argv, Options& o) {
@@ -77,6 +80,7 @@ bool ParseOptions(int argc, wchar_t** argv, Options& o) {
     } else if (a == L"--window" && (v = next())) o.windowTitle = v;
     else if (a == L"--duration" && (v = next())) o.duration = std::wcstod(v, nullptr);
     else if (a == L"--no-overlay") o.overlay = false;
+    else if (a == L"--publish") o.publish = true;
     else if (a == L"--inflight" && (v = next())) o.inflight = _wtoi(v);
     else if (a == L"--gpu-priority" && (v = next())) {
       std::string name;
@@ -129,6 +133,14 @@ int RunImages(const Options& o) {
   if (!o.dumpDir.empty()) std::filesystem::create_directories(o.dumpDir);
   std::vector<float> input(3ull * detector.InputSize() * detector.InputSize());
 
+  // 离线模式也可发布，用于逐帧核对读取方收到的内容（帧号即图片序号）
+  std::unique_ptr<nr::ResultPublisher> publisher;
+  if (o.publish) {
+    publisher = std::make_unique<nr::ResultPublisher>();
+    publisher->PublishMetadata("{\"layout\":1,\"state\":\"running\",\"offline\":true,\"decoder\":\"" +
+                               std::string(detector.DecoderName()) + "\"}");
+  }
+
   std::wstring line;
   size_t count = 0;
   while (std::getline(list, line)) {
@@ -137,8 +149,14 @@ int RunImages(const Options& o) {
     auto texture = nr::CreateTexture(device.Get(), image);
     const D3D11_BOX region{0, 0, 0, image.width, image.height, 1};
     nr::StageTimes t;
+    const int64_t submitQpc = nr::QpcNow();
     detector.Submit(context.Get(), texture.Get(), region, 0, 0, 0);
     const nr::DetectionOutput& r = detector.Wait(0, &t);
+    if (publisher) {
+      publisher->Publish({count, submitQpc, nr::QpcNow(),
+                          {0, 0, static_cast<LONG>(image.width), static_cast<LONG>(image.height)}},
+                         r);
+    }
 
     std::string s = "{\"image\":\"";
     for (char c : Utf8(line)) s += (c == '\\') ? std::string("/") : std::string(1, c);
@@ -152,7 +170,22 @@ int RunImages(const Options& o) {
                     d.score, d.cls);
       s += buf;
     }
-    s += "]}\n";
+    s += "]";
+    if (r.numKeypoints > 0) {
+      // 每个目标一行：x, y, score 依次排列
+      s += ",\"kpt\":[";
+      for (int i = 0; i < r.count; ++i) {
+        s += i ? ",[" : "[";
+        for (int j = 0; j < r.numKeypoints; ++j) {
+          const nr::Keypoint& k = r.keypoints[i * r.numKeypoints + j];
+          std::snprintf(buf, sizeof(buf), "%s%.4f,%.4f,%.6f", j ? "," : "", k.x, k.y, k.score);
+          s += buf;
+        }
+        s += "]";
+      }
+      s += "]";
+    }
+    s += "}\n";
     json << s;
 
     if (!o.dumpDir.empty()) {
@@ -192,6 +225,7 @@ int RunLive(const Options& o) {
   config.inflight = o.inflight;
   config.gpuPriority = o.gpuPriority;
   config.mmcss = o.mmcss;
+  config.publishResults = o.publish;
 
   // CUDA 等待方式需在上下文创建前设置，作用于整个进程（设计方案 6.2）
   if (o.sync != L"auto") {
@@ -253,6 +287,10 @@ int RunLive(const Options& o) {
               s.gpuPriorityEffective >= 0 && s.gpuPriorityEffective <= 5
                   ? nr::GpuPriorityName(static_cast<nr::GpuPriority>(s.gpuPriorityEffective))
                   : "未知");
+  if (o.publish) {
+    std::printf("  结果发布 %s\n", s.publishing ? "已开启（Local\\NeuralReflex.Results.v1）"
+                                               : ("未开启：" + s.publishError).c_str());
+  }
 
   if (!o.summaryJson.empty()) {
     FILE* f = nullptr;
