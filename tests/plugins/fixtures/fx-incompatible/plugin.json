@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "id": "fx-incompatible",
+  "name": "fx-incompatible",
+  "version": "1.0.0",
+  "api": 2,
+  "entry": {
+    "command": "python",
+    "args": [
+      "main.py"
+    ]
+  },
+  "description": "需要协议主版本 2"
+}

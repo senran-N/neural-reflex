@@ -1,0 +1,47 @@
+{
+  "schema": 1,
+  "id": "fx-consumer",
+  "name": "fx-consumer",
+  "version": "1.0.0",
+  "api": 1,
+  "entry": {
+    "command": "python",
+    "args": [
+      "main.py"
+    ]
+  },
+  "description": "结果消费者：按设置以 latest 或 all 模式读取，并以指标报告收到的帧",
+  "features": [
+    "control",
+    "results.ring"
+  ],
+  "settings": [
+    {
+      "key": "mode",
+      "type": "enum",
+      "options": [
+        {
+          "value": "latest"
+        },
+        {
+          "value": "all"
+        }
+      ],
+      "default": "latest"
+    },
+    {
+      "key": "sleepMs",
+      "type": "number",
+      "min": 0,
+      "max": 1000,
+      "default": 0
+    },
+    {
+      "key": "maxFps",
+      "type": "number",
+      "min": 0,
+      "max": 1000,
+      "default": 0
+    }
+  ]
+}

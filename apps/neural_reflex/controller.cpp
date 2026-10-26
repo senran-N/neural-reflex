@@ -1,6 +1,7 @@
 #include "controller.h"
 
 #include "common/d3d_util.h"
+#include "resource.h"
 
 #include <nlohmann/json.hpp>
 #include <shellapi.h>
@@ -8,8 +9,10 @@
 #include <wrl/client.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <fstream>
 
 namespace nr::app {
@@ -25,6 +28,19 @@ HWND HwndFromString(const std::string& s) {
 
 json PercentilesJson(const Percentiles& p) {
   return {{"n", p.count}, {"p50", p.p50}, {"p95", p.p95}, {"p99", p.p99}, {"max", p.max}};
+}
+
+// 系统版本，写入诊断（7.6）
+std::string WindowsVersion() {
+  wchar_t display[64] = L"", build[32] = L"";
+  DWORD ubr = 0, size = sizeof(display);
+  const wchar_t* key = L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion";
+  RegGetValueW(HKEY_LOCAL_MACHINE, key, L"DisplayVersion", RRF_RT_REG_SZ, nullptr, display, &size);
+  size = sizeof(build);
+  RegGetValueW(HKEY_LOCAL_MACHINE, key, L"CurrentBuild", RRF_RT_REG_SZ, nullptr, build, &size);
+  size = sizeof(ubr);
+  RegGetValueW(HKEY_LOCAL_MACHINE, key, L"UBR", RRF_RT_REG_DWORD, nullptr, &ubr, &size);
+  return "Windows " + ToUtf8(display) + " " + ToUtf8(build) + "." + std::to_string(ubr);
 }
 
 std::string Lower(std::string s) {
@@ -57,9 +73,15 @@ Controller::Controller(Sender send, std::filesystem::path appDir, std::filesyste
       dirs.push_back(repo / "plugins");
     }
     dirs.push_back(dataDir_ / "plugins");
-    const auto sdk = std::filesystem::exists(appDir_ / "sdk" / "python") ? appDir_ / "sdk" / "python"
+    PluginHostOptions options;
+    options.searchDirs = std::move(dirs);
+    options.userDir = dataDir_ / "plugins";
+    options.dataDir = dataDir_;
+    options.sdkDir = std::filesystem::exists(appDir_ / "sdk" / "python") ? appDir_ / "sdk" / "python"
                                                                          : repo / "sdk" / "python";
-    plugins_ = std::make_unique<PluginHost>(dirs, dataDir_, sdk);
+    options.hostVersion = NR_VERSION_TEXT;
+    plugins_ = std::make_unique<PluginHost>(std::move(options));
+    SendSessionToPlugins();
     plugins_->Start(settings_.plugins);
   }
 
@@ -115,6 +137,10 @@ void Controller::OnMessage(const std::string& text, HWND owner) {
       plugins_->SetSettings(msg.at("id").get<std::string>(), msg.at("settings"));
       SaveSettings();
       SendPlugins();
+    } else if (cmd == "pluginAction") {
+      plugins_->InvokeAction(msg.at("id").get<std::string>(), msg.at("action").get<std::string>());
+    } else if (cmd == "exportDiagnostics") {
+      ExportDiagnostics();
     } else if (cmd == "restartPlugin") {
       plugins_->Restart(msg.at("id").get<std::string>());
       SendPlugins();
@@ -188,15 +214,97 @@ void Controller::OnTimer() {
     SendState();
     if (s.phase == SessionPhase::kFailed) Toast("error", s.error);
     if (s.phase == SessionPhase::kRunning && !s.publishError.empty()) Toast("warning", "结果共享未开启：" + s.publishError);
+    SendSessionToPlugins();
   }
   if (s.phase == SessionPhase::kRunning || s.phase == SessionPhase::kPreparing) SendStats();
   if (plugins_->Version() != sentPluginsVersion_) SendPlugins();
-  for (const auto& n : plugins_->TakeNotifications()) Toast("info", n.plugin + "：" + n.text);
+  for (const auto& n : plugins_->TakeNotifications()) Toast(n.level, n.plugin + "：" + n.text);
+
+  std::vector<std::pair<std::string, std::string>> toasts;
+  std::filesystem::path reveal;
+  {
+    std::lock_guard lock(asyncMutex_);
+    toasts = std::exchange(asyncToasts_, {});
+    reveal = std::exchange(asyncReveal_, {});
+  }
+  for (const auto& [level, text] : toasts) Toast(level, text);
+  if (!reveal.empty()) {
+    const std::wstring args = L"/select,\"" + reveal.wstring() + L"\"";
+    ShellExecuteW(nullptr, L"open", L"explorer.exe", args.c_str(), nullptr, SW_SHOWNORMAL);
+  }
 }
 
 void Controller::SendPlugins() {
   sentPluginsVersion_ = plugins_->Version();
-  send_(plugins_->Snapshot().dump());
+  send_(plugins_->Snapshot().dump(-1, ' ', false, json::error_handler_t::replace));
+}
+
+// 检测会话状态通知插件（扩展机制方案 7.4 的 session 事件）
+void Controller::SendSessionToPlugins() {
+  const SessionSnapshot s = session_.Snapshot(0);
+  plugins_->SetSession({{"state", PhaseName(s.phase)},
+                        {"session", s.sessionId},
+                        {"publishing", s.publishing},
+                        {"model", model_.name}});
+}
+
+// 诊断导出（7.6）：宿主信息与各插件的状态、日志与 diagnose 回答写入一个 JSON 文件
+void Controller::ExportDiagnostics() {
+  const SessionSnapshot s = session_.Snapshot(30);
+  json seconds = json::array();
+  for (const SessionSecond& sec : s.seconds) {
+    seconds.push_back({{"t", sec.t}, {"dps", sec.detectionsPerSec}, {"p50", sec.latency.p50}, {"p95", sec.latency.p95}});
+  }
+  json host = {{"version", NR_VERSION_TEXT},
+               {"os", WindowsVersion()},
+               {"gpu", gpuName_},
+               {"pluginApi", kPluginApiText},
+               {"pluginFeatures", HostPluginFeatures()},
+               {"session",
+                {{"phase", PhaseName(s.phase)},
+                 {"error", s.error},
+                 {"adapter", s.adapter},
+                 {"decoder", s.decoder},
+                 {"inputSize", s.inputSize},
+                 {"publishing", s.publishing},
+                 {"publishError", s.publishError},
+                 {"detections", s.detections},
+                 {"latency", PercentilesJson(s.latency)},
+                 {"seconds", seconds}}},
+               {"model", model_.name},
+               {"settings",
+                {{"conf", settings_.conf},
+                 {"iou", settings_.iou},
+                 {"mode", settings_.mode},
+                 {"overlay", settings_.overlay},
+                 {"cudaGraph", settings_.cudaGraph},
+                 {"gpuRealtime", settings_.gpuRealtime},
+                 {"publishResults", settings_.publishResults}}}};
+  const std::filesystem::path dir = dataDir_ / "diagnostics";
+  plugins_->CollectDiagnostics([this, host = std::move(host), dir](json plugins) {
+    const std::time_t now = std::time(nullptr);
+    std::tm tm{};
+    localtime_s(&tm, &now);
+    char name[64];
+    std::strftime(name, sizeof(name), "diag-%Y%m%d-%H%M%S.json", &tm);
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    const auto path = dir / name;
+    const json out = {{"generatedAt", std::chrono::duration_cast<std::chrono::milliseconds>(
+                                          std::chrono::system_clock::now().time_since_epoch())
+                                          .count()},
+                      {"host", host},
+                      {"plugins", std::move(plugins)}};
+    std::ofstream f(path, std::ios::binary);
+    f << out.dump(2, ' ', false, json::error_handler_t::replace);
+    std::lock_guard lock(asyncMutex_);
+    if (f) {
+      asyncToasts_.push_back({"info", "已导出诊断：" + ToUtf8(path.wstring())});
+      asyncReveal_ = path;
+    } else {
+      asyncToasts_.push_back({"error", "导出诊断失败：无法写入 " + ToUtf8(path.wstring())});
+    }
+  });
 }
 
 void Controller::Start() {
@@ -223,6 +331,7 @@ void Controller::Start() {
   session_.Start(config);
   lastPhase_ = SessionPhase::kPreparing;
   SendState();
+  SendSessionToPlugins();  // OnTimer 只在阶段变化时通知，这里已同步更新 lastPhase_
   json reset = {{"type", "statsReset"}};
   send_(reset.dump());
 }
@@ -233,6 +342,7 @@ void Controller::Stop() {
   lastPhase_ = session_.Snapshot(0).phase;
   model_.engineCached = std::filesystem::exists(dataDir_ / "engines" / (model_.path.stem().string() + ".engine"));
   SendState();
+  SendSessionToPlugins();
 }
 
 void Controller::SelectModel(const std::filesystem::path& path) {

@@ -45,43 +45,67 @@ window.NR_PREVIEW = (emit) => {
   });
   const stateMsg = () => ({ type: 'state', phase, error: '', target, model, settings, gpu: 'NVIDIA GeForce RTX 4050 Laptop GPU' });
 
-  // 插件：示例插件运行中，另一个声明了宿主不支持的协议版本
-  const alertSchema = [
-    { key: 'classes', type: 'string', label: '告警类别', description: '类别名称，多个用逗号分隔', default: 'person' },
-    { key: 'minScore', type: 'number', label: '最低置信度', min: 0.05, max: 0.95, step: 0.05, default: 0.5 },
-    { key: 'minCount', type: 'number', label: '最少目标数', description: '同一帧中达到这个数量才算出现', min: 1, max: 50, step: 1, default: 1 },
-    { key: 'holdFrames', type: 'number', label: '持续帧数', description: '连续出现这么多帧才告警', min: 1, max: 1440, step: 1, default: 30 },
-    { key: 'cooldown', type: 'number', label: '告警间隔（秒）', min: 1, max: 600, step: 1, default: 10 },
-    { key: 'sound', type: 'enum', label: '提示音', options: [{ value: 'none', label: '无' }, { value: 'beep', label: '系统提示音' }], default: 'none' },
-    { key: 'record', type: 'boolean', label: '记录到 CSV', description: '写入插件数据目录下的 alerts.csv', default: true },
-  ];
+  // 插件：两个示例插件运行中（其中一个报告降级），另一个声明了宿主不支持的协议主版本
   const t0 = Date.parse('2026-10-26T14:02:10+08:00');
+  const alertManifest = {"description": "指定类别的目标连续出现一段时间后发出提示，并可把告警记录到 CSV。", "settings": [{"key": "classes", "type": "string", "label": "告警类别", "description": "类别名称，多个用逗号分隔", "default": "person", "live": true}, {"key": "minScore", "type": "number", "label": "最低置信度", "min": 0.05, "max": 0.95, "step": 0.05, "default": 0.5, "live": true}, {"key": "minCount", "type": "number", "label": "最少目标数", "description": "同一帧中达到这个数量才算出现", "min": 1, "max": 50, "step": 1, "default": 1, "live": true}, {"key": "holdFrames", "type": "number", "label": "持续帧数", "description": "连续出现这么多帧才告警", "min": 1, "max": 1440, "step": 1, "default": 30, "live": true}, {"key": "cooldown", "type": "number", "label": "告警间隔（秒）", "min": 1, "max": 600, "step": 1, "default": 10, "live": true}, {"key": "sound", "type": "enum", "label": "提示音", "options": [{"value": "none", "label": "无"}, {"value": "beep", "label": "系统提示音"}], "default": "none", "live": true}, {"key": "record", "type": "boolean", "label": "记录到 CSV", "description": "写入插件数据目录下的 alerts.csv", "default": true, "live": true}], "actions": [{"id": "test", "label": "测试提示", "description": "按当前设置发出一次提示（含提示音）"}, {"id": "reset", "label": "清零计数", "description": "告警次数归零", "confirm": "确认清零？"}]};
+  const recorderManifest = {"description": "按顺序把每帧检测结果写入 JSON Lines 文件，每个会话一个文件；来不及读取而丢失的帧以缺口记录写明。", "settings": [{"key": "classes", "type": "string", "label": "记录类别", "description": "类别名称，多个用逗号分隔；留空记录全部类别", "default": "", "live": true}, {"key": "minScore", "type": "number", "label": "最低置信度", "min": 0, "max": 0.95, "step": 0.05, "default": 0, "live": true}, {"key": "keypoints", "type": "boolean", "label": "记录关键点", "description": "姿态模型的关键点一并写入", "default": true, "live": true}, {"key": "skipEmpty", "type": "boolean", "label": "跳过没有目标的帧", "description": "按类别与置信度筛选后没有目标的帧不写入（缺口记录不受影响）", "default": false, "live": true}, {"key": "maxFileMB", "type": "number", "label": "单个文件上限（MB）", "description": "超过后在同一会话内新建文件", "min": 10, "max": 4000, "step": 10, "default": 500, "live": true}], "actions": [{"id": "rotate", "label": "新建文件", "description": "结束当前文件，之后的帧写入新文件"}, {"id": "open", "label": "打开记录目录"}, {"id": "clear", "label": "删除旧记录", "description": "删除当前文件之外的全部记录", "confirm": "确认删除？"}]};
   const plugins = {
-    type: 'plugins', api: 1, userDir: 'C:/Users/me/AppData/Local/NeuralReflex/plugins', resultsMapping: 'Local/NeuralReflex.Results.v1',
+    type: 'plugins', api: '1.1', features: ['control', 'results.ring'], hostVersion: '0.1.0',
+    userDir: 'C:/Users/me/AppData/Local/NeuralReflex/plugins', resultsMapping: 'Local/NeuralReflex.Results.v1',
     items: [
       {
-        id: 'target-alert', name: '目标告警', version: '0.1.0', description: '指定类别的目标连续出现一段时间后发出提示，并可把告警记录到 CSV。',
+        id: 'target-alert', name: '目标告警', version: '0.2.0', description: alertManifest.description,
         source: 'bundled', dir: 'D:/Myproject/neural-reflex/plugins/target-alert', api: 1, compatible: true, command: 'python',
-        enabled: true, state: 'running', error: '', pid: 30412, restarts: 0, status: '监视 person · 模型 yolo26n-640-nms-fp16',
+        features: [], optionalFeatures: ['control'], activeFeatures: ['control'], control: true, restartPolicy: 'always',
+        actions: alertManifest.actions, enabled: true, state: 'running', error: '', pid: 30412, restarts: 0,
+        startedAt: t0, readyMs: 142, status: '监视 person · 模型 yolo26n-640-nms-fp16', health: { state: 'ok', text: '' },
         metrics: [
-          { key: 'fps', label: '处理帧率', value: 144.9, unit: '帧/秒' }, { key: 'latency', label: '送达延迟中位数', value: 0.047, unit: 'ms' },
-          { key: 'processed', label: '已处理帧', value: 8642, unit: '' }, { key: 'streak', label: '当前连续帧', value: 8642, unit: '' },
-          { key: 'alerts', label: '告警次数', value: 6, unit: '' },
+          { key: 'alerts', label: '告警次数', value: 6, unit: '' }, { key: 'nr.fps', label: 'nr.fps', value: 144.9, unit: '' },
+          { key: 'nr.latency', label: 'nr.latency', value: 0.047, unit: '' }, { key: 'nr.process', label: 'nr.process', value: 0.112, unit: '' },
+          { key: 'nr.skipped', label: 'nr.skipped', value: 0, unit: '' }, { key: 'nr.lost', label: 'nr.lost', value: 0, unit: '' },
+          { key: 'streak', label: '当前连续帧', value: 8642, unit: '' },
         ],
-        settingsSchema: alertSchema,
+        resources: { cpu: 1.6, memoryMB: 12.4, processes: 2 },
+        settingsSchema: alertManifest.settings,
         settings: { classes: 'person', minScore: 0.5, minCount: 1, holdFrames: 30, cooldown: 10, sound: 'none', record: true },
         logs: [
-          { t: t0, level: 'info', text: '已启动，进程号 30412' },
-          { t: t0 + 120, level: 'info', text: '监视 person，置信度 ≥ 0.50，至少 1 个，连续 30 帧，间隔 10 s' },
+          { t: t0, level: 'info', text: '已启动，进程号 30412，等待就绪' },
+          { t: t0 + 142, level: 'info', text: '已就绪，启动用时 142 ms' },
+          { t: t0 + 150, level: 'info', text: '监视 person，置信度 ≥ 0.50，至少 1 个，连续 30 帧，间隔 10 s' },
           { t: t0 + 4300, level: 'info', text: '提示：检测到 person × 3（最高置信度 0.86）' },
           { t: t0 + 14500, level: 'info', text: '提示：检测到 person × 3（最高置信度 0.85）' },
         ],
       },
       {
+        id: 'result-recorder', name: '结果记录', version: '0.1.0', description: recorderManifest.description,
+        source: 'bundled', dir: 'D:/Myproject/neural-reflex/plugins/result-recorder', api: 1, compatible: true, command: 'python',
+        features: ['control', 'results.ring'], optionalFeatures: [], activeFeatures: ['control', 'results.ring'], control: true,
+        restartPolicy: 'always', actions: recorderManifest.actions, enabled: true, state: 'running', error: '', pid: 30988, restarts: 0,
+        startedAt: t0, readyMs: 128, status: '写入 20261026-140212-1792994532000-001.jsonl',
+        health: { state: 'degraded', text: '最近 10 秒有 37 帧来不及读取' },
+        metrics: [
+          { key: 'recorded', label: '已记录帧', value: 18211, unit: '' }, { key: 'rate', label: '写入速率', value: 141.2, unit: '帧/秒' },
+          { key: 'lost', label: '缺口帧数', value: 37, unit: '' }, { key: 'size', label: '当前文件', value: 21.6, unit: 'MB' },
+          { key: 'nr.fps', label: 'nr.fps', value: 141.2, unit: '' }, { key: 'nr.latency', label: 'nr.latency', value: 0.31, unit: '' },
+          { key: 'nr.process', label: 'nr.process', value: 0.62, unit: '' }, { key: 'nr.skipped', label: 'nr.skipped', value: 0, unit: '' },
+          { key: 'nr.lost', label: 'nr.lost', value: 37, unit: '' },
+        ],
+        resources: { cpu: 3.1, memoryMB: 14.8, processes: 2 },
+        settingsSchema: recorderManifest.settings,
+        settings: { classes: '', minScore: 0, keypoints: true, skipEmpty: false, maxFileMB: 500 },
+        logs: [
+          { t: t0, level: 'info', text: '已启动，进程号 30988，等待就绪' },
+          { t: t0 + 128, level: 'info', text: '已就绪，启动用时 128 ms' },
+          { t: t0 + 2100, level: 'info', text: '开始记录 20261026-140212-1792994532000-001.jsonl' },
+          { t: t0 + 9300, level: 'warning', text: '健康状态：最近 10 秒有 37 帧来不及读取' },
+        ],
+      },
+      {
         id: 'cloud-export', name: '云端导出', version: '2.0.0', description: '把每帧结果上传到远程服务。',
         source: 'user', dir: 'C:/Users/me/AppData/Local/NeuralReflex/plugins/cloud-export', api: 2, compatible: false, command: 'cloud-export.exe',
-        enabled: false, state: 'incompatible', error: '插件需要协议版本 2，宿主支持版本 1', pid: 0, restarts: 0, status: '',
-        metrics: [], settingsSchema: [], settings: {}, logs: [],
+        features: [], optionalFeatures: [], activeFeatures: [], control: false, restartPolicy: 'always', actions: [],
+        enabled: false, state: 'incompatible', error: '插件需要协议主版本 2，宿主协议版本为 1.1', pid: 0, restarts: 0, status: '',
+        health: null, resources: null, metrics: [], settingsSchema: [], settings: {}, logs: [],
       },
     ],
   };
@@ -107,6 +131,12 @@ window.NR_PREVIEW = (emit) => {
         if (p && msg.settings) p.settings = msg.settings;
         if (p && p.enabled) { p.restarts += 1; p.logs.push({ t: Date.now(), level: 'info', text: '已停止，退出代码 0' }, { t: Date.now(), level: 'info', text: '已启动，进程号 30412' }); }
         emit(plugins);
+      } else if (msg.cmd === 'pluginAction') {
+        const p = plugins.items.find((x) => x.id === msg.id);
+        const a = p && p.actions.find((x) => x.id === msg.action);
+        if (a) emit({ type: 'toast', level: 'info', text: `${p.name}：${a.label}：已完成` });
+      } else if (msg.cmd === 'exportDiagnostics') {
+        emit({ type: 'toast', level: 'info', text: '已导出诊断：C:/Users/me/AppData/Local/NeuralReflex/diagnostics/diag-20261026-140530.json' });
       } else if (msg.cmd === 'rescanPlugins') {
         emit(plugins);
       } else if (msg.cmd === 'refreshTargets') {

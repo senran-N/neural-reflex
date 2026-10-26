@@ -64,6 +64,7 @@ struct SessionSnapshot {
   int numKeypoints = 0;
   std::string decoder;  // 解码器名称（扩展机制方案 4.4）
   bool publishing = false;
+  int64_t sessionId = 0;     // 发布时元数据中的会话号，未发布为 0
   std::string publishError;  // 请求发布但未能发布的原因，UTF-8
   uint64_t detections = 0;
   Percentiles latency, pre, infer, post;  // 整个会话

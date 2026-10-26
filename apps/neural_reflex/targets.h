@@ -29,7 +29,4 @@ struct MonitorTarget {
 std::vector<WindowTarget> ListWindows(DWORD excludePid);
 std::vector<MonitorTarget> ListMonitors();
 
-std::string ToUtf8(const std::wstring& w);
-std::wstring FromUtf8(const std::string& s);
-
 }  // namespace nr::app

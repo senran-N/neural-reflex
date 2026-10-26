@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "id": "fx-never",
+  "name": "fx-never",
+  "version": "1.0.0",
+  "api": 1,
+  "entry": {
+    "command": "python",
+    "args": [
+      "main.py"
+    ]
+  },
+  "description": "出错退出且不重启",
+  "restart": "never"
+}

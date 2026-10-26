@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "id": "fx-invalid",
+  "name": "fx-invalid",
+  "version": "1.0.0",
+  "api": 1,
+  "entry": {
+    "command": "python",
+    "args": [
+      "main.py"
+    ]
+  },
+  "description": "清单无效",
+  "restart": "sometimes"
+}

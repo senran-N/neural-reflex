@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "id": "fx-missing",
+  "name": "fx-missing",
+  "version": "1.0.0",
+  "api": 1,
+  "entry": {
+    "command": "python",
+    "args": [
+      "main.py"
+    ]
+  },
+  "description": "需要宿主没有的特性",
+  "features": [
+    "control",
+    "overlay.draw"
+  ]
+}

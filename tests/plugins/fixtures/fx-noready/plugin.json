@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "id": "fx-noready",
+  "name": "fx-noready",
+  "version": "1.0.0",
+  "api": 1,
+  "entry": {
+    "command": "python",
+    "args": [
+      "main.py"
+    ]
+  },
+  "description": "从不报告就绪",
+  "features": [
+    "control"
+  ],
+  "startTimeout": 1500
+}

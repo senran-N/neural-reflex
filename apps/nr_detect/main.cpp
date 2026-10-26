@@ -9,7 +9,7 @@
 #include "inference/d3d_cuda_interop.h"
 #include "inference/detector.h"
 #include "common/qpc.h"
-#include "pipeline/result_publisher.h"
+#include "results/result_publisher.h"
 #include "pipeline/session.h"
 
 #include <cuda_runtime.h>
@@ -18,6 +18,7 @@
 
 #include <clocale>
 #include <cstdio>
+#include <ctime>
 #include <cwchar>
 #include <exception>
 #include <fstream>
@@ -135,10 +136,12 @@ int RunImages(const Options& o) {
 
   // 离线模式也可发布，用于逐帧核对读取方收到的内容（帧号即图片序号）
   std::unique_ptr<nr::ResultPublisher> publisher;
+  const int64_t sessionId = static_cast<int64_t>(time(nullptr)) * 1000;
   if (o.publish) {
     publisher = std::make_unique<nr::ResultPublisher>();
-    publisher->PublishMetadata("{\"layout\":1,\"state\":\"running\",\"offline\":true,\"decoder\":\"" +
-                               std::string(detector.DecoderName()) + "\"}");
+    publisher->PublishMetadata("{\"layout\":1,\"session\":" + std::to_string(sessionId) +
+                               ",\"state\":\"running\",\"offline\":true,\"coordinates\":\"screen-physical\","
+                               "\"clock\":\"qpc\",\"decoder\":\"" + std::string(detector.DecoderName()) + "\"}");
   }
 
   std::wstring line;
@@ -153,7 +156,7 @@ int RunImages(const Options& o) {
     detector.Submit(context.Get(), texture.Get(), region, 0, 0, 0);
     const nr::DetectionOutput& r = detector.Wait(0, &t);
     if (publisher) {
-      publisher->Publish({count, submitQpc, nr::QpcNow(),
+      publisher->Publish({sessionId, count, submitQpc, nr::QpcNow(),
                           {0, 0, static_cast<LONG>(image.width), static_cast<LONG>(image.height)}},
                          r);
     }

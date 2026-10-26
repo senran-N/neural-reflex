@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "id": "fx-optional",
+  "name": "fx-optional",
+  "version": "1.0.0",
+  "api": 1,
+  "entry": {
+    "command": "python",
+    "args": [
+      "main.py"
+    ]
+  },
+  "description": "可选特性",
+  "optionalFeatures": [
+    "control",
+    "future.thing"
+  ]
+}

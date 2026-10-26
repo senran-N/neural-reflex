@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "id": "fx-legacy",
+  "name": "fx-legacy",
+  "version": "1.0.0",
+  "api": 1,
+  "entry": {
+    "command": "python",
+    "args": [
+      "main.py"
+    ]
+  },
+  "description": "阶段 3 的插件：没有特性，以关闭标准输入表示停止"
+}

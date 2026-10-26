@@ -1,0 +1,44 @@
+{
+  "schema": 1,
+  "id": "fx-consumer-cpp",
+  "name": "fx-consumer-cpp",
+  "version": "1.0.0",
+  "api": 1,
+  "entry": {
+    "command": "bin/fx-consumer-cpp.exe"
+  },
+  "description": "结果消费者（C++ SDK）：与 fx-consumer 行为相同",
+  "features": [
+    "control",
+    "results.ring"
+  ],
+  "settings": [
+    {
+      "key": "mode",
+      "type": "enum",
+      "options": [
+        {
+          "value": "latest"
+        },
+        {
+          "value": "all"
+        }
+      ],
+      "default": "latest"
+    },
+    {
+      "key": "sleepMs",
+      "type": "number",
+      "min": 0,
+      "max": 1000,
+      "default": 0
+    },
+    {
+      "key": "maxFps",
+      "type": "number",
+      "min": 0,
+      "max": 1000,
+      "default": 0
+    }
+  ]
+}

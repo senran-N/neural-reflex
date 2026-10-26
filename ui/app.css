@@ -248,12 +248,23 @@ input[type="range"] { width: 100%; accent-color: var(--accent); height: 20px; }
 /* ---------- 插件 ---------- */
 .card-note { color: var(--muted); font-size: var(--fs-small); margin-top: 14px; overflow-wrap: anywhere; }
 .plugin-state { display: flex; align-items: center; gap: 10px; margin: 14px 0 4px; min-width: 0; }
-.plugin-state > span:last-child { color: var(--muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plugin-state > #pld-status { color: var(--muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plugin-state > .pill.plain { margin-left: auto; }
+.pill.degraded { background: var(--pill-warning-bg); color: var(--pill-warning-ink); }
+.pill.error { background: var(--pill-negative-bg); color: var(--pill-negative-ink); }
+.hint-inline { font-size: var(--fs-small); margin-left: 8px; }
+.plugin-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
+.plugin-actions .btn.confirming { border-color: var(--warning); color: var(--warning); }
+.card-foot { flex-wrap: wrap; row-gap: 10px; }
+.setting-apply { color: var(--muted); font-size: var(--fs-small); font-weight: 400; margin-left: 6px; }
+.log .fields { color: #7c7d84; }
 .plugin-error { color: var(--negative); margin: 8px 0 0; overflow-wrap: anywhere; }
 #pld .kv { margin-top: 12px; }
 #pld .section-title { margin-top: 20px; }
 .section-title .saved { font-size: var(--fs-small); margin-left: 8px; }
 .kpis.wrap { flex-wrap: wrap; row-gap: 14px; margin-bottom: 0; }
+/* 可换行的指标：不用左分隔线，换行后每行左端对齐 */
+.kpis.wrap .kpi { padding: 0 32px 0 0; border-left: 0; }
 .plugin-settings .field + .switch-row, .plugin-settings .switch-row + .field { margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--rule); }
 .plugin-settings .field + .field { padding-top: 20px; border-top: 1px solid var(--rule); }
 .text-input { width: 100%; height: var(--control-height); padding: 0 14px; background: var(--ground); border: 1px solid var(--control); border-radius: var(--radius-control); color: var(--text); }

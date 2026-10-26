@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "id": "fx-onfailure",
+  "name": "fx-onfailure",
+  "version": "1.0.0",
+  "api": 1,
+  "entry": {
+    "command": "python",
+    "args": [
+      "main.py"
+    ]
+  },
+  "description": "自行正常结束",
+  "restart": "on-failure"
+}

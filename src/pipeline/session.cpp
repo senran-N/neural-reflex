@@ -9,7 +9,7 @@
 #include "inference/d3d_cuda_interop.h"
 #include "inference/cuda_check.h"
 #include "overlay/overlay.h"
-#include "pipeline/result_publisher.h"
+#include "results/result_publisher.h"
 
 #include <avrt.h>
 #include <nlohmann/json.hpp>
@@ -191,6 +191,8 @@ std::string SessionMetadata(const Detector& detector, const SessionConfig& confi
                       {"decoder", detector.DecoderName()},
                       {"inputSize", detector.InputSize()},
                       {"numClasses", detector.NumClasses()},
+                      {"coordinates", "screen-physical"},  // 扩展机制方案 7.5
+                      {"clock", "qpc"},
                       {"classNames", classes},
                       {"keypoints",
                        {{"count", detector.NumKeypoints()}, {"names", m.keypointNames}, {"skeleton", m.skeleton}}}};
@@ -298,6 +300,7 @@ void Session::Run(SessionConfig config) {
       }
       std::lock_guard lock(mutex_);
       state_.publishing = publisher != nullptr;
+      state_.sessionId = publisher ? sessionId : 0;
     }
 
     LatestSlot<OverlayFrame> overlaySlot;
@@ -347,7 +350,7 @@ void Session::Run(SessionConfig config) {
           const DetectionOutput& r = detector.Wait(item.slot, &t);
           const int64_t doneQpc = QpcNow();
           const double ms = QpcToMs(doneQpc - item.acquireQpc);
-          if (publisher) publisher->Publish({frameIndex, item.acquireQpc, doneQpc, item.region}, r);
+          if (publisher) publisher->Publish({sessionId, frameIndex, item.acquireQpc, doneQpc, item.region}, r);
           ++frameIndex;
 
           frameOut.boxes.clear();

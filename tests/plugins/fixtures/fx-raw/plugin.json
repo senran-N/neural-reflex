@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "id": "fx-raw",
+  "name": "fx-raw",
+  "version": "1.0.0",
+  "api": 1,
+  "entry": {
+    "command": "python",
+    "args": [
+      "main.py"
+    ]
+  },
+  "description": "不使用 SDK：声明控制通道却从不读取标准输入，并派生一个子进程",
+  "features": [
+    "control"
+  ],
+  "stopTimeout": 1000
+}

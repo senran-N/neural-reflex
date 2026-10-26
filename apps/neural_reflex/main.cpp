@@ -8,6 +8,7 @@
 #include <WebView2.h>
 #include <WebView2EnvironmentOptions.h>
 #include <dwmapi.h>
+#include <shellapi.h>
 #include <shlobj.h>
 #include <wrl.h>
 
@@ -60,7 +61,7 @@ void ResizeWebView() {
 
 void SendToUi(const std::string& json) {
   if (!g_app.webview) return;
-  const std::wstring w = nr::app::FromUtf8(json);
+  const std::wstring w = nr::FromUtf8(json);
   g_app.webview->PostWebMessageAsJson(w.c_str());
 }
 
@@ -117,7 +118,7 @@ HRESULT OnControllerCreated(HRESULT result, ICoreWebView2Controller* controller)
             if (!trusted) return S_OK;
             LPWSTR message = nullptr;
             if (SUCCEEDED(args->TryGetWebMessageAsString(&message)) && message) {
-              g_app.bridge->OnMessage(nr::app::ToUtf8(message), g_app.hwnd);
+              g_app.bridge->OnMessage(nr::ToUtf8(message), g_app.hwnd);
               CoTaskMemFree(message);
             }
             return S_OK;
@@ -215,7 +216,20 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR cmdLine, int show) {
   if (FAILED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED))) return 1;
 
   g_app.appDir = ExeDir();
-  g_app.dataDir = DataDir();
+  // --data-dir=<目录>：使用单独的数据目录（设置、引擎缓存、插件数据与日志），便于测试时不影响日常使用的配置
+  int argc = 0;
+  if (wchar_t** argv = CommandLineToArgvW(GetCommandLineW(), &argc)) {
+    for (int i = 1; i < argc; ++i) {
+      const std::wstring a = argv[i];
+      if (a.rfind(L"--data-dir=", 0) == 0) g_app.dataDir = std::filesystem::absolute(a.substr(11));
+    }
+    LocalFree(argv);
+  }
+  if (g_app.dataDir.empty()) {
+    g_app.dataDir = DataDir();
+  } else {
+    std::filesystem::create_directories(g_app.dataDir);
+  }
 
   WNDCLASSEXW wc{sizeof(wc)};
   wc.lpfnWndProc = WndProc;

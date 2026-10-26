@@ -48,6 +48,35 @@ target_link_libraries(nr_testsource PRIVATE nr_common)
 add_executable(nr_gpuload tools/nr_gpuload/main.cpp)
 target_link_libraries(nr_gpuload PRIVATE nr_common)
 
+# 结果共享与外部进程插件（扩展机制方案第 5、7 节），不依赖 CUDA
+add_library(nr_results STATIC src/results/result_publisher.cpp)
+target_link_libraries(nr_results PUBLIC nr_common)
+
+add_library(nr_plugins STATIC src/plugins/plugin_host.cpp)
+target_include_directories(nr_plugins PUBLIC third_party)
+target_link_libraries(nr_plugins PUBLIC nr_results psapi)
+
+# 插件开发与测试工具（7.7）：合成或回放结果发布；命令行托管单个插件
+add_executable(nr_publish tools/nr_publish/main.cpp)
+target_include_directories(nr_publish PRIVATE third_party)
+target_link_libraries(nr_publish PRIVATE nr_results winmm)
+
+add_executable(nr_plugin_run tools/nr_plugin_run/main.cpp)
+target_link_libraries(nr_plugin_run PRIVATE nr_plugins)
+
+# 示例插件 udp-forward（C++ SDK，7.8）：只依赖 SDK 头文件与 nlohmann/json，不链接宿主的任何库。
+# 输出到插件目录的 bin，开发时宿主可直接从源码树启动
+add_executable(udp-forward plugins/udp-forward/src/main.cpp)
+target_include_directories(udp-forward PRIVATE sdk/cpp third_party)
+target_link_libraries(udp-forward PRIVATE ws2_32)
+set_target_properties(udp-forward PROPERTIES RUNTIME_OUTPUT_DIRECTORY $<1:${CMAKE_SOURCE_DIR}/plugins/udp-forward/bin>)
+
+# 协议测试用的 C++ 插件（tests/plugins），与 Python 测试插件行为相同
+add_executable(fx-consumer-cpp tests/plugins/fixtures/fx-consumer-cpp/src/main.cpp)
+target_include_directories(fx-consumer-cpp PRIVATE sdk/cpp third_party)
+set_target_properties(fx-consumer-cpp PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY $<1:${CMAKE_SOURCE_DIR}/tests/plugins/fixtures/fx-consumer-cpp/bin>)
+
 if(NR_ENABLE_CUDA)
   enable_language(CUDA)
   # 自有内核覆盖 Turing 到 Blackwell，并附带 PTX 以便向前兼容
@@ -73,9 +102,9 @@ if(NR_ENABLE_CUDA)
   target_link_libraries(nr_inference PUBLIC nr_common CUDA::cudart_static TRTRTX::tensorrt
                                             TRTRTX::nvonnxparser)
 
-  add_library(nr_pipeline STATIC src/pipeline/session.cpp src/pipeline/result_publisher.cpp)
+  add_library(nr_pipeline STATIC src/pipeline/session.cpp)
   target_include_directories(nr_pipeline PRIVATE third_party)
-  target_link_libraries(nr_pipeline PUBLIC nr_inference nr_capture nr_overlay avrt)
+  target_link_libraries(nr_pipeline PUBLIC nr_inference nr_capture nr_overlay nr_results avrt)
 
   add_executable(nr_detect apps/nr_detect/main.cpp)
   target_link_libraries(nr_detect PRIVATE nr_pipeline)
@@ -93,12 +122,11 @@ if(NR_ENABLE_CUDA)
     apps/neural_reflex/main.cpp
     apps/neural_reflex/controller.cpp
     apps/neural_reflex/targets.cpp
-    apps/neural_reflex/plugin_host.cpp
     apps/neural_reflex/app.rc
     apps/neural_reflex/app.manifest
   )
   target_include_directories(NeuralReflex PRIVATE "${NR_WEBVIEW2_ROOT}/build/native/include" third_party)
-  target_link_libraries(NeuralReflex PRIVATE nr_pipeline
+  target_link_libraries(NeuralReflex PRIVATE nr_pipeline nr_plugins
                         "${NR_WEBVIEW2_ROOT}/build/native/x64/WebView2LoaderStatic.lib" dwmapi shell32 version)
   add_custom_command(TARGET NeuralReflex POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:TRTRTX::tensorrt>
@@ -110,8 +138,11 @@ if(NR_ENABLE_CUDA)
   install(FILES $<TARGET_FILE:TRTRTX::tensorrt> $<TARGET_FILE:TRTRTX::nvonnxparser> DESTINATION .)
   install(DIRECTORY ui/ DESTINATION ui)
   # 外部进程插件：示例插件与 Python SDK（扩展机制方案 5.5）
-  install(DIRECTORY plugins/ DESTINATION plugins PATTERN "__pycache__" EXCLUDE)
+  install(DIRECTORY plugins/ DESTINATION plugins PATTERN "__pycache__" EXCLUDE PATTERN "src" EXCLUDE
+          PATTERN "*.pdb" EXCLUDE)
   install(DIRECTORY sdk/python/ DESTINATION sdk/python PATTERN "__pycache__" EXCLUDE)
+  install(DIRECTORY sdk/cpp/ DESTINATION sdk/cpp)
+  install(DIRECTORY third_party/nlohmann DESTINATION sdk/cpp)
   install(FILES models/reference/yolo26n-640-nms-fp16.onnx models/reference/yolo26n-640-nms-fp32.json
           DESTINATION models OPTIONAL)
   install(FILES LICENSE THIRD_PARTY_NOTICES.md DESTINATION . OPTIONAL)

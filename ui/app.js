@@ -325,29 +325,47 @@
     render();
   }
 
-  // ---------- 插件（扩展机制方案 5.5、第 6 节） ----------
-  const pluginStateText = { running: '运行中', stopped: '已停止', stopping: '正在停止', backoff: '等待重启', failed: '失败', incompatible: '不兼容', invalid: '清单无效' };
-  const pluginPill = { running: 'running', stopping: 'preparing', backoff: 'preparing', failed: 'failed', incompatible: 'failed', invalid: 'failed' };
-  const metricText = (v) => (typeof v === 'number' ? nf(Number.isInteger(v) ? 0 : Math.min(3, (String(v).split('.')[1] || '').length)).format(v) : String(v ?? '—'));
+  // ---------- 插件（扩展机制方案 5.5、第 6、7 节） ----------
+  const pluginStateText = { starting: '启动中', running: '运行中', stopped: '已停止', stopping: '正在停止', exited: '已结束', backoff: '等待重启', failed: '失败', incompatible: '不兼容', invalid: '清单无效' };
+  const pluginPill = { starting: 'preparing', running: 'running', stopping: 'preparing', backoff: 'preparing', failed: 'failed', incompatible: 'failed', invalid: 'failed' };
+  const pluginSource = { user: '用户安装', dev: '开发目录', bundled: '程序自带' };
+  const restartPolicy = { always: '退出后自动重启', 'on-failure': '出错退出时重启', never: '不自动重启' };
+  const healthText = { degraded: '降级', error: '异常' };
+  // SDK 自动上报的保留指标（7.6），标签由宿主界面决定
+  const consumerMetrics = [
+    ['nr.fps', '消费帧率', '帧/秒'], ['nr.latency', '送达延迟', 'ms'], ['nr.process', '处理耗时 P95', 'ms'],
+    ['nr.skipped', '跳过帧', ''], ['nr.lost', '丢失帧', ''],
+  ];
+  const metricText = (v) => (typeof v === 'number' ? nf(Number.isInteger(v) ? 0 : Math.min(3, (String(v).split('.')[1] || '').length)).format(v) : (v !== null && typeof v === 'object' ? JSON.stringify(v) : String(v ?? '—')));
   const timeText = (t) => new Date(t).toLocaleTimeString('zh-CN', { hour12: false });
   // 数值设置按步长的小数位显示（步长 0.05 → 两位）
   const stepText = (v, step) => (step ? nf(Math.min(6, (String(step).split('.')[1] || '').length)).format(v) : metricText(v));
   let settingsFormKey = '';  // 已生成的设置表单对应的插件与值；用户编辑期间不重建
+  let confirming = null;     // 等待再次点击确认的操作 {plugin, action}
+
+  // 内容不变时不重建，避免每秒的资源刷新打断正在进行的点击
+  function setHtml(el, html) {
+    if (el.dataset.html === html) return;
+    el.dataset.html = html;
+    el.innerHTML = html;
+  }
 
   const selectedPlugin = () => state.plugins.items.find((p) => p.id === state.selectedPlugin) || state.plugins.items[0] || null;
+  const kpiHtml = (label, value, unit) => `<div class="kpi"><div class="label">${esc(label)}</div>
+      <div class="value">${esc(value)}${unit ? `<span class="unit">${esc(unit)}</span>` : ''}</div></div>`;
 
   function renderPlugins() {
     const items = state.plugins.items;
     const running = items.filter((p) => p.state === 'running').length;
-    $('pl-sub').textContent = items.length ? `${items.length} 个插件 · ${running} 个运行中 · 插件协议版本 ${state.plugins.api}` : '没有找到插件';
+    $('pl-sub').textContent = items.length ? `${items.length} 个插件 · ${running} 个运行中 · 插件协议 ${state.plugins.api}` : '没有找到插件';
     $('pll-count').textContent = `${items.length} 个`;
     $('pll-note').textContent = state.plugins.userDir ? `安装插件：把含 plugin.json 的文件夹放入 ${state.plugins.userDir}，然后重新扫描。` : '';
     const sel = selectedPlugin();
-    $('pll-rows').innerHTML = items.map((p) => `<tr data-plugin="${esc(p.id)}" aria-selected="${!!sel && p.id === sel.id}" style="cursor:pointer">
+    setHtml($('pll-rows'), items.map((p) => `<tr data-plugin="${esc(p.id)}" aria-selected="${!!sel && p.id === sel.id}" style="cursor:pointer">
         <td class="name"><span>${esc(p.name)}</span><div class="muted" style="font-size:12px;line-height:16px;overflow:hidden;text-overflow:ellipsis">${esc(p.version ? `${p.id} · ${p.version}` : p.id)}</div></td>
         <td><span class="pill ${pluginPill[p.state] || ''}">${esc(pluginStateText[p.state] || p.state)}</span></td>
         <td class="num"><button class="switch" type="button" role="switch" data-enable="${esc(p.id)}" aria-checked="${p.enabled}" aria-label="启用${esc(p.name)}"${p.compatible ? '' : ' disabled'}></button></td></tr>`).join('')
-      || '<tr><td colspan="3" class="muted">插件目录中没有插件</td></tr>';
+      || '<tr><td colspan="3" class="muted">插件目录中没有插件</td></tr>');
     $('pld').hidden = !sel;
     if (sel) renderPluginDetail(sel);
   }
@@ -359,21 +377,51 @@
     $('pld-pill').className = `pill ${pluginPill[p.state] || ''}`;
     $('pld-pill').textContent = pluginStateText[p.state] || p.state;
     $('pld-status').textContent = p.status || '';
+    const health = p.health && p.health.state !== 'ok' && p.state === 'running' ? p.health : null;
+    $('pld-health').hidden = !health;
+    if (health) {
+      $('pld-health').className = `pill plain ${health.state}`;
+      $('pld-health').textContent = `${healthText[health.state] || health.state}${health.text ? `：${health.text}` : ''}`;
+    }
     $('pld-error').hidden = !p.error;
     $('pld-error').textContent = p.error || '';
+    const features = (p.activeFeatures || []).join('、') || '无';
     const kv = [
-      ['标识', p.id], ['来源', p.source === 'user' ? '用户安装' : '程序自带'],
-      ['插件协议', p.compatible ? `版本 ${p.api}` : `需要版本 ${p.api}，宿主支持 ${state.plugins.api}`],
-      ['入口', p.command || '—'], ['进程号', p.pid || '—'], ['重启次数', p.restarts], ['目录', p.dir],
+      ['标识', p.id], ['来源', pluginSource[p.source] || p.source],
+      ['插件协议', p.compatible ? `${p.api} · 特性：${features}` : `需要 ${p.api}，宿主 ${state.plugins.api}`],
+      ['入口', p.command || '—'], ['进程号', p.pid || '—'],
+      ['重启', `${restartPolicy[p.restartPolicy] || p.restartPolicy || '—'} · 已重启 ${p.restarts} 次`], ['目录', p.dir],
     ];
-    $('pld-kv').innerHTML = kv.map(([k, v]) => `<dt>${k}</dt><dd title="${esc(v)}">${esc(v)}</dd>`).join('');
-    $('pld-metrics-wrap').hidden = !p.metrics.length;
-    $('pld-metrics').innerHTML = p.metrics.map((m) => `<div class="kpi"><div class="label">${esc(m.label)}</div>
-      <div class="value">${esc(metricText(m.value))}${m.unit ? `<span class="unit">${esc(m.unit)}</span>` : ''}</div></div>`).join('');
+    setHtml($('pld-kv'), kv.map(([k, v]) => `<dt>${k}</dt><dd title="${esc(v)}">${esc(v)}</dd>`).join(''));
+
+    // 运行：插件的消费（SDK 报告）与进程树资源（宿主测量）
+    const byKey = Object.fromEntries((p.metrics || []).map((m) => [m.key, m.value]));
+    const run = consumerMetrics.filter(([k]) => k in byKey).map(([k, label, unit]) => kpiHtml(label, metricText(byKey[k]), unit));
+    const r = p.resources;
+    if (r) {
+      if (r.cpu != null) run.push(kpiHtml('CPU', nf(1).format(r.cpu), '%'));
+      run.push(kpiHtml('内存', nf(1).format(r.memoryMB), 'MB'));
+      if (r.processes > 1) run.push(kpiHtml('进程', r.processes, ''));
+    }
+    $('pld-run-wrap').hidden = !run.length;
+    setHtml($('pld-run'), run.join(''));
+    const own = (p.metrics || []).filter((m) => !m.key.startsWith('nr.'));
+    $('pld-metrics-wrap').hidden = !own.length;
+    setHtml($('pld-metrics'), own.map((m) => kpiHtml(m.label, metricText(m.value), m.unit)).join(''));
+
+    // 操作按钮（7.4）：只在启用控制通道时显示，运行中可用；带确认文字的需要再次点击
+    const actions = p.control ? (p.actions || []) : [];
+    setHtml($('pld-actions'), actions.map((a) => {
+      const pending = confirming && confirming.plugin === p.id && confirming.action === a.id;
+      return `<button class="btn${pending ? ' confirming' : ''}" type="button" data-action="${esc(a.id)}"
+        title="${esc(a.description || '')}"${p.state === 'running' ? '' : ' disabled'}>${esc(pending ? a.confirm : a.label)}</button>`;
+    }).join(''));
+
     renderPluginSettings(p);
     const log = $('pld-log');
     const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 8;
-    log.innerHTML = p.logs.map((l) => `<span class="${esc(l.level)}"><span class="t">${timeText(l.t)}</span>  ${esc(l.text)}</span>`).join('\n');
+    const fieldsText = (f) => Object.entries(f).map(([k, v]) => `${k}=${v !== null && typeof v === 'object' ? JSON.stringify(v) : v}`).join(' ');
+    log.innerHTML = p.logs.map((l) => `<span class="${esc(l.level)}"><span class="t">${timeText(l.t)}</span>  ${esc(l.text)}${l.fields ? ` <span class="fields">${esc(fieldsText(l.fields))}</span>` : ''}</span>`).join('\n');
     if (atBottom) log.scrollTop = log.scrollHeight;
     $('pld-restart').disabled = !p.compatible || !p.enabled;
   }
@@ -382,18 +430,19 @@
     const schema = p.settingsSchema || [];
     $('pld-settings-wrap').hidden = !schema.length;
     const box = $('pld-settings');
-    const key = `${p.id}|${JSON.stringify(schema)}|${JSON.stringify(p.settings)}`;
+    const key = `${p.id}|${p.control}|${JSON.stringify(schema)}|${JSON.stringify(p.settings)}`;
     if (key === settingsFormKey || box.contains(document.activeElement)) return;
     settingsFormKey = key;
-    box.innerHTML = schema.map((s) => settingHtml(s, p.settings[s.key])).join('');
+    box.innerHTML = schema.map((s) => settingHtml(s, p.settings[s.key], p.control)).join('');
   }
 
-  // 按插件清单的设置项声明生成表单控件
-  function settingHtml(s, v) {
+  // 按插件清单的设置项声明生成表单控件；标明修改后是立即生效还是重启插件（7.4）
+  function settingHtml(s, v, control) {
     const label = esc(s.label || s.key), k = esc(s.key), id = `pls-${k}`;
+    const apply = `<span class="setting-apply">${s.live && control ? '立即生效' : '重启插件'}</span>`;
     const hint = s.description ? `<div class="hint">${esc(s.description)}</div>` : '';
     if (s.type === 'boolean') {
-      return `<div class="switch-row"><div><div class="title">${label}</div>${s.description ? `<div class="desc">${esc(s.description)}</div>` : ''}</div>
+      return `<div class="switch-row"><div><div class="title">${label}${apply}</div>${s.description ? `<div class="desc">${esc(s.description)}</div>` : ''}</div>
         <button class="switch" type="button" role="switch" data-setting="${k}" aria-checked="${!!v}" aria-label="${label}"></button></div>`;
     }
     if (s.type === 'number') {
@@ -401,14 +450,14 @@
       const input = ranged
         ? `<input type="range" id="${id}" data-setting="${k}" min="${s.min}" max="${s.max}" step="${s.step ?? 'any'}" value="${v}">`
         : `<input class="text-input" type="number" id="${id}" data-setting="${k}" step="${s.step ?? 'any'}" value="${v}">`;
-      return `<div class="field"><label for="${id}"><span>${label}</span>${ranged ? `<span class="value" data-value-for="${k}" data-step="${s.step ?? ''}">${stepText(v, s.step)}</span>` : ''}</label>${input}${hint}</div>`;
+      return `<div class="field"><label for="${id}"><span>${label}${apply}</span>${ranged ? `<span class="value" data-value-for="${k}" data-step="${s.step ?? ''}">${stepText(v, s.step)}</span>` : ''}</label>${input}${hint}</div>`;
     }
     if (s.type === 'enum') {
       const buttons = s.options.map((o) => `<button type="button" data-setting="${k}" data-option="${esc(JSON.stringify(o.value))}"
         aria-pressed="${JSON.stringify(o.value) === JSON.stringify(v)}">${esc(o.label ?? o.value)}</button>`).join('');
-      return `<div class="field"><div class="label"><span>${label}</span></div><div class="segmented" role="group" aria-label="${label}">${buttons}</div>${hint}</div>`;
+      return `<div class="field"><div class="label"><span>${label}${apply}</span></div><div class="segmented" role="group" aria-label="${label}">${buttons}</div>${hint}</div>`;
     }
-    return `<div class="field"><label for="${id}"><span>${label}</span></label><input class="text-input" type="text" id="${id}" data-setting="${k}" value="${esc(v ?? '')}">${hint}</div>`;
+    return `<div class="field"><label for="${id}"><span>${label}${apply}</span></label><input class="text-input" type="text" id="${id}" data-setting="${k}" value="${esc(v ?? '')}">${hint}</div>`;
   }
 
   let pluginSavedTimer = 0;
@@ -417,6 +466,9 @@
     if (!p) return;
     p.settings = { ...p.settings, [name]: value };
     send('setPluginSettings', { id: p.id, settings: p.settings });
+    const s = (p.settingsSchema || []).find((x) => x.key === name) || {};
+    const alive = p.state === 'running' || p.state === 'starting';
+    $('pld-saved').textContent = !alive ? '已保存' : (s.live && p.control ? '已保存，立即生效' : '已保存，插件将重启');
     $('pld-saved').classList.add('show');
     clearTimeout(pluginSavedTimer);
     pluginSavedTimer = setTimeout(() => $('pld-saved').classList.remove('show'), 1600);
@@ -468,6 +520,23 @@
   $('st-realtime').addEventListener('click', () => saveSettings({ gpuRealtime: !state.settings.gpuRealtime }));
   $('st-publish').addEventListener('click', () => saveSettings({ publishResults: !state.settings.publishResults }));
   $('pl-rescan').addEventListener('click', () => send('rescanPlugins'));
+  $('pl-diag').addEventListener('click', () => send('exportDiagnostics'));
+  $('pld-actions').addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-action]');
+    const p = selectedPlugin();
+    if (!b || b.disabled || !p) return;
+    const a = (p.actions || []).find((x) => x.id === b.dataset.action);
+    if (!a) return;
+    const pending = confirming && confirming.plugin === p.id && confirming.action === a.id;
+    if (a.confirm && !pending) {
+      confirming = { plugin: p.id, action: a.id };
+      setTimeout(() => { if (confirming && confirming.action === a.id) { confirming = null; renderPlugins(); } }, 4000);
+    } else {
+      confirming = null;
+      send('pluginAction', { id: p.id, action: a.id });
+    }
+    renderPlugins();
+  });
   $('pl-open').addEventListener('click', () => send('openPluginDir'));
   $('pld-open').addEventListener('click', () => { const p = selectedPlugin(); if (p) send('openPluginDir', { id: p.id }); });
   $('pld-restart').addEventListener('click', () => { const p = selectedPlugin(); if (p) send('restartPlugin', { id: p.id }); });

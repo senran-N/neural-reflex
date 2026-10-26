@@ -4,8 +4,8 @@
 IDI_APP ICON "app.ico"
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 0,1,0,0
- PRODUCTVERSION 0,1,0,0
+ FILEVERSION NR_VERSION_MAJOR,NR_VERSION_MINOR,NR_VERSION_PATCH,0
+ PRODUCTVERSION NR_VERSION_MAJOR,NR_VERSION_MINOR,NR_VERSION_PATCH,0
  FILEOS VOS_NT_WINDOWS32
  FILETYPE VFT_APP
 BEGIN
@@ -15,8 +15,8 @@ BEGIN
     BEGIN
       VALUE "FileDescription", "Neural Reflex"
       VALUE "ProductName", "Neural Reflex"
-      VALUE "FileVersion", "0.1.0"
-      VALUE "ProductVersion", "0.1.0"
+      VALUE "FileVersion", NR_VERSION_TEXT
+      VALUE "ProductVersion", NR_VERSION_TEXT
       VALUE "OriginalFilename", "NeuralReflex.exe"
     END
   END

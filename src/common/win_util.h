@@ -20,6 +20,9 @@ bool DisablePowerThrottling();
 
 void SetCurrentThreadName(const wchar_t* name);
 
+std::string ToUtf8(const std::wstring& w);
+std::wstring FromUtf8(const std::string& s);
+
 // 进程级 GPU 调度优先级（WDDM，D3DKMTSetProcessSchedulingPriorityClass），作用于本进程的所有 GPU 上下文，
 // 包括 CUDA（设计方案 6.4）。返回 NTSTATUS，0 为成功。返回成功不代表按请求生效，以 GetGpuPriority() 读回为准。
 enum class GpuPriority { kIdle = 0, kBelowNormal = 1, kNormal = 2, kAboveNormal = 3, kHigh = 4, kRealtime = 5 };

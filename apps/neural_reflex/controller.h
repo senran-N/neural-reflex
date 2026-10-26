@@ -4,13 +4,14 @@
 // 只在界面线程调用；实时处理在 Session 的线程中进行。
 
 #include "pipeline/session.h"
-#include "plugin_host.h"
+#include "plugins/plugin_host.h"
 #include "targets.h"
 
 #include <filesystem>
 #include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -59,6 +60,8 @@ class Controller {
   void SendModels();
   void SendStats();
   void SendPlugins();
+  void SendSessionToPlugins();
+  void ExportDiagnostics();
   void Toast(const std::string& level, const std::string& text);
 
   void SelectModel(const std::filesystem::path& path);
@@ -87,6 +90,11 @@ class Controller {
 
   std::unique_ptr<PluginHost> plugins_;
   uint64_t sentPluginsVersion_ = 0;
+
+  // 其他线程完成的工作（诊断导出）留给界面线程提示
+  std::mutex asyncMutex_;
+  std::vector<std::pair<std::string, std::string>> asyncToasts_;  // (级别, 文字)
+  std::filesystem::path asyncReveal_;                             // 在资源管理器中选中的文件
 };
 
 }  // namespace nr::app

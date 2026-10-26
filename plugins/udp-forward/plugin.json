@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "id": "udp-forward",
+  "name": "UDP 转发",
+  "version": "0.1.0",
+  "description": "把每帧检测结果以 JSON 数据报发送到指定的 UDP 地址，供其他程序或其他电脑接收；按设置限速，只发送最新结果。",
+  "api": 1,
+  "features": ["control"],
+  "entry": { "command": "bin/udp-forward.exe" },
+  "settings": [
+    { "key": "host", "type": "string", "label": "目标地址", "description": "IPv4 地址或主机名", "default": "127.0.0.1" },
+    { "key": "port", "type": "number", "label": "目标端口", "min": 1, "max": 65535, "step": 1, "default": 9100 },
+    { "key": "maxFps", "type": "number", "label": "发送速率上限（帧/秒）", "description": "0 表示不限，随检测速率发送", "min": 0, "max": 1000, "step": 10, "default": 60, "live": true },
+    { "key": "classes", "type": "string", "label": "发送类别", "description": "类别名称，多个用逗号分隔；留空发送全部类别", "default": "", "live": true },
+    { "key": "minScore", "type": "number", "label": "最低置信度", "min": 0, "max": 0.95, "step": 0.05, "default": 0.25, "live": true },
+    { "key": "keypoints", "type": "boolean", "label": "发送关键点", "default": false, "live": true }
+  ],
+  "actions": [
+    { "id": "test", "label": "发送测试数据报" }
+  ]
+}

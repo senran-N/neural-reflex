@@ -2,17 +2,22 @@
   "schema": 1,
   "id": "target-alert",
   "name": "目标告警",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "指定类别的目标连续出现一段时间后发出提示，并可把告警记录到 CSV。",
   "api": 1,
+  "optionalFeatures": ["control"],
   "entry": { "command": "python", "args": ["main.py"] },
   "settings": [
-    { "key": "classes", "type": "string", "label": "告警类别", "description": "类别名称，多个用逗号分隔", "default": "person" },
-    { "key": "minScore", "type": "number", "label": "最低置信度", "min": 0.05, "max": 0.95, "step": 0.05, "default": 0.5 },
-    { "key": "minCount", "type": "number", "label": "最少目标数", "description": "同一帧中达到这个数量才算出现", "min": 1, "max": 50, "step": 1, "default": 1 },
-    { "key": "holdFrames", "type": "number", "label": "持续帧数", "description": "连续出现这么多帧才告警", "min": 1, "max": 1440, "step": 1, "default": 30 },
-    { "key": "cooldown", "type": "number", "label": "告警间隔（秒）", "min": 1, "max": 600, "step": 1, "default": 10 },
-    { "key": "sound", "type": "enum", "label": "提示音", "options": [ { "value": "none", "label": "无" }, { "value": "beep", "label": "系统提示音" } ], "default": "none" },
-    { "key": "record", "type": "boolean", "label": "记录到 CSV", "description": "写入插件数据目录下的 alerts.csv", "default": true }
+    { "key": "classes", "type": "string", "label": "告警类别", "description": "类别名称，多个用逗号分隔", "default": "person", "live": true },
+    { "key": "minScore", "type": "number", "label": "最低置信度", "min": 0.05, "max": 0.95, "step": 0.05, "default": 0.5, "live": true },
+    { "key": "minCount", "type": "number", "label": "最少目标数", "description": "同一帧中达到这个数量才算出现", "min": 1, "max": 50, "step": 1, "default": 1, "live": true },
+    { "key": "holdFrames", "type": "number", "label": "持续帧数", "description": "连续出现这么多帧才告警", "min": 1, "max": 1440, "step": 1, "default": 30, "live": true },
+    { "key": "cooldown", "type": "number", "label": "告警间隔（秒）", "min": 1, "max": 600, "step": 1, "default": 10, "live": true },
+    { "key": "sound", "type": "enum", "label": "提示音", "options": [ { "value": "none", "label": "无" }, { "value": "beep", "label": "系统提示音" } ], "default": "none", "live": true },
+    { "key": "record", "type": "boolean", "label": "记录到 CSV", "description": "写入插件数据目录下的 alerts.csv", "default": true, "live": true }
+  ],
+  "actions": [
+    { "id": "test", "label": "测试提示", "description": "按当前设置发出一次提示（含提示音）" },
+    { "id": "reset", "label": "清零计数", "description": "告警次数归零", "confirm": "确认清零？" }
   ]
 }

@@ -1,0 +1,67 @@
+{
+  "schema": 1,
+  "id": "fx-control",
+  "name": "fx-control",
+  "version": "1.0.0",
+  "api": 1,
+  "entry": {
+    "command": "python",
+    "args": [
+      "main.py"
+    ]
+  },
+  "description": "控制通道：就绪、热更新、操作、请求、事件、失败报告",
+  "features": [
+    "control"
+  ],
+  "stopTimeout": 3000,
+  "settings": [
+    {
+      "key": "mode",
+      "type": "string",
+      "default": "normal"
+    },
+    {
+      "key": "delay",
+      "type": "number",
+      "min": 0,
+      "max": 10000,
+      "default": 0
+    },
+    {
+      "key": "level",
+      "type": "number",
+      "min": 0,
+      "max": 100,
+      "default": 1,
+      "live": true
+    },
+    {
+      "key": "label",
+      "type": "string",
+      "default": "a",
+      "live": true
+    },
+    {
+      "key": "restartKey",
+      "type": "number",
+      "min": 0,
+      "max": 100,
+      "default": 0
+    }
+  ],
+  "actions": [
+    {
+      "id": "echo",
+      "label": "回显"
+    },
+    {
+      "id": "slow",
+      "label": "慢操作"
+    },
+    {
+      "id": "boom",
+      "label": "出错的操作"
+    }
+  ]
+}

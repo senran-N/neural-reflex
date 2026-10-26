@@ -170,6 +170,7 @@
       <header class="title-row">
         <div class="identity"><div><h1 id="pl-h1">插件</h1><p class="sub" id="pl-sub">—</p></div></div>
         <div class="actions">
+          <button class="btn" type="button" id="pl-diag">导出诊断</button>
           <button class="btn" type="button" id="pl-rescan">重新扫描</button>
           <button class="btn" type="button" id="pl-open">打开插件目录</button>
         </div>
@@ -186,22 +187,29 @@
         <article class="card span-7" aria-labelledby="pld-name" id="pld">
           <div class="card-head"><h2 id="pld-name">—</h2><span class="meta" id="pld-version"></span></div>
           <p class="muted" id="pld-desc"></p>
-          <div class="plugin-state"><span class="pill" id="pld-pill">—</span><span id="pld-status"></span></div>
+          <div class="plugin-state"><span class="pill" id="pld-pill">—</span><span id="pld-status"></span><span class="pill plain" id="pld-health" hidden></span></div>
           <p class="plugin-error" id="pld-error" hidden></p>
           <dl class="kv" id="pld-kv"></dl>
+          <div id="pld-run-wrap" hidden>
+            <h3 class="section-title">运行 <span class="hint-inline">消费由插件 SDK 报告，资源由宿主测量</span></h3>
+            <div class="kpis wrap" id="pld-run"></div>
+          </div>
           <div id="pld-metrics-wrap">
             <h3 class="section-title">指标</h3>
             <div class="kpis wrap" id="pld-metrics"></div>
           </div>
           <div id="pld-settings-wrap">
-            <h3 class="section-title">设置 <span class="saved" id="pld-saved">已保存，插件已重启</span></h3>
+            <h3 class="section-title">设置 <span class="saved" id="pld-saved">已保存</span></h3>
             <div class="plugin-settings" id="pld-settings"></div>
           </div>
           <h3 class="section-title">日志</h3>
           <pre class="log" id="pld-log" tabindex="0" aria-label="插件日志"></pre>
           <div class="card-foot">
-            <button class="btn" type="button" id="pld-restart">重启</button>
-            <button class="btn text" type="button" id="pld-open">打开所在目录</button>
+            <div class="plugin-actions" id="pld-actions" role="group" aria-label="插件操作"></div>
+            <div class="plugin-actions">
+              <button class="btn" type="button" id="pld-restart">重启</button>
+              <button class="btn text" type="button" id="pld-open">打开所在目录</button>
+            </div>
           </div>
         </article>
       </div>

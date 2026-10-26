@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "id": "result-recorder",
+  "name": "结果记录",
+  "version": "0.1.0",
+  "description": "按顺序把每帧检测结果写入 JSON Lines 文件，每个会话一个文件；来不及读取而丢失的帧以缺口记录写明。",
+  "api": 1,
+  "features": ["control", "results.ring"],
+  "entry": { "command": "python", "args": ["main.py"] },
+  "stopTimeout": 5000,
+  "settings": [
+    { "key": "classes", "type": "string", "label": "记录类别", "description": "类别名称，多个用逗号分隔；留空记录全部类别", "default": "", "live": true },
+    { "key": "minScore", "type": "number", "label": "最低置信度", "min": 0, "max": 0.95, "step": 0.05, "default": 0, "live": true },
+    { "key": "keypoints", "type": "boolean", "label": "记录关键点", "description": "姿态模型的关键点一并写入", "default": true, "live": true },
+    { "key": "skipEmpty", "type": "boolean", "label": "跳过没有目标的帧", "description": "按类别与置信度筛选后没有目标的帧不写入（缺口记录不受影响）", "default": false, "live": true },
+    { "key": "maxFileMB", "type": "number", "label": "单个文件上限（MB）", "description": "超过后在同一会话内新建文件", "min": 10, "max": 4000, "step": 10, "default": 500, "live": true }
+  ],
+  "actions": [
+    { "id": "rotate", "label": "新建文件", "description": "结束当前文件，之后的帧写入新文件" },
+    { "id": "open", "label": "打开记录目录" },
+    { "id": "clear", "label": "删除旧记录", "description": "删除当前文件之外的全部记录", "confirm": "确认删除？" }
+  ]
+}
