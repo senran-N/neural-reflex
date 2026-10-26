@@ -32,3 +32,7 @@ reports/raw/
 # 设计检查截图（direction.json 保留，记录所选风格）
 .taste-skill/inspect/
 dist/
+
+# Python 缓存
+__pycache__/
+*.pyc
