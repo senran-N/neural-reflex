@@ -45,6 +45,47 @@ window.NR_PREVIEW = (emit) => {
   });
   const stateMsg = () => ({ type: 'state', phase, error: '', target, model, settings, gpu: 'NVIDIA GeForce RTX 4050 Laptop GPU' });
 
+  // 插件：示例插件运行中，另一个声明了宿主不支持的协议版本
+  const alertSchema = [
+    { key: 'classes', type: 'string', label: '告警类别', description: '类别名称，多个用逗号分隔', default: 'person' },
+    { key: 'minScore', type: 'number', label: '最低置信度', min: 0.05, max: 0.95, step: 0.05, default: 0.5 },
+    { key: 'minCount', type: 'number', label: '最少目标数', description: '同一帧中达到这个数量才算出现', min: 1, max: 50, step: 1, default: 1 },
+    { key: 'holdFrames', type: 'number', label: '持续帧数', description: '连续出现这么多帧才告警', min: 1, max: 1440, step: 1, default: 30 },
+    { key: 'cooldown', type: 'number', label: '告警间隔（秒）', min: 1, max: 600, step: 1, default: 10 },
+    { key: 'sound', type: 'enum', label: '提示音', options: [{ value: 'none', label: '无' }, { value: 'beep', label: '系统提示音' }], default: 'none' },
+    { key: 'record', type: 'boolean', label: '记录到 CSV', description: '写入插件数据目录下的 alerts.csv', default: true },
+  ];
+  const t0 = Date.parse('2026-10-26T14:02:10+08:00');
+  const plugins = {
+    type: 'plugins', api: 1, userDir: 'C:/Users/me/AppData/Local/NeuralReflex/plugins', resultsMapping: 'Local/NeuralReflex.Results.v1',
+    items: [
+      {
+        id: 'target-alert', name: '目标告警', version: '0.1.0', description: '指定类别的目标连续出现一段时间后发出提示，并可把告警记录到 CSV。',
+        source: 'bundled', dir: 'D:/Myproject/neural-reflex/plugins/target-alert', api: 1, compatible: true, command: 'python',
+        enabled: true, state: 'running', error: '', pid: 30412, restarts: 0, status: '监视 person · 模型 yolo26n-640-nms-fp16',
+        metrics: [
+          { key: 'fps', label: '处理帧率', value: 144.9, unit: '帧/秒' }, { key: 'latency', label: '送达延迟中位数', value: 0.047, unit: 'ms' },
+          { key: 'processed', label: '已处理帧', value: 8642, unit: '' }, { key: 'streak', label: '当前连续帧', value: 8642, unit: '' },
+          { key: 'alerts', label: '告警次数', value: 6, unit: '' },
+        ],
+        settingsSchema: alertSchema,
+        settings: { classes: 'person', minScore: 0.5, minCount: 1, holdFrames: 30, cooldown: 10, sound: 'none', record: true },
+        logs: [
+          { t: t0, level: 'info', text: '已启动，进程号 30412' },
+          { t: t0 + 120, level: 'info', text: '监视 person，置信度 ≥ 0.50，至少 1 个，连续 30 帧，间隔 10 s' },
+          { t: t0 + 4300, level: 'info', text: '提示：检测到 person × 3（最高置信度 0.86）' },
+          { t: t0 + 14500, level: 'info', text: '提示：检测到 person × 3（最高置信度 0.85）' },
+        ],
+      },
+      {
+        id: 'cloud-export', name: '云端导出', version: '2.0.0', description: '把每帧结果上传到远程服务。',
+        source: 'user', dir: 'C:/Users/me/AppData/Local/NeuralReflex/plugins/cloud-export', api: 2, compatible: false, command: 'cloud-export.exe',
+        enabled: false, state: 'incompatible', error: '插件需要协议版本 2，宿主支持版本 1', pid: 0, restarts: 0, status: '',
+        metrics: [], settingsSchema: [], settings: {}, logs: [],
+      },
+    ],
+  };
+
   return {
     handle(msg) {
       if (msg.cmd === 'hello') {
@@ -56,6 +97,18 @@ window.NR_PREVIEW = (emit) => {
           { path: model.path.replace('nms-fp16', 'e2e-fp32'), name: 'yolo26n-640-e2e-fp32', sizeBytes: 9942036, precision: 'FP32', inputSize: 640, classCount: 80, engineCached: false, supported: true, decoder: 'yolo-end2end' },
         ] });
         emit(stats(seconds));
+        emit(plugins);
+      } else if (msg.cmd === 'setPluginEnabled') {
+        const p = plugins.items.find((x) => x.id === msg.id);
+        if (p && p.compatible) Object.assign(p, msg.enabled ? { enabled: true, state: 'running', pid: 30412 } : { enabled: false, state: 'stopped', pid: 0 });
+        emit(plugins);
+      } else if (msg.cmd === 'setPluginSettings' || msg.cmd === 'restartPlugin') {
+        const p = plugins.items.find((x) => x.id === msg.id);
+        if (p && msg.settings) p.settings = msg.settings;
+        if (p && p.enabled) { p.restarts += 1; p.logs.push({ t: Date.now(), level: 'info', text: '已停止，退出代码 0' }, { t: Date.now(), level: 'info', text: '已启动，进程号 30412' }); }
+        emit(plugins);
+      } else if (msg.cmd === 'rescanPlugins') {
+        emit(plugins);
       } else if (msg.cmd === 'refreshTargets') {
         emit({ type: 'targets', windows, monitors });
       } else if (msg.cmd === 'setSettings') {

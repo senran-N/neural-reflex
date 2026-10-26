@@ -19,6 +19,7 @@
     phase: 'idle', error: '', target: { kind: 'none' }, model: null, gpu: '',
     settings: { conf: 0.25, iou: 0.7, mode: 'wgc', overlay: true, cudaGraph: true, gpuRealtime: false, publishResults: false },
     windows: [], monitors: [], models: [], stats: null, history: [],
+    plugins: { items: [], api: 1, userDir: '' }, selectedPlugin: null,
   };
 
   // ---------- 与宿主通信 ----------
@@ -44,13 +45,14 @@
         state.history.push(...msg.seconds);
         if (state.history.length > HISTORY) state.history.splice(0, state.history.length - HISTORY);
         break;
-      case 'toast': toast(msg.text); break;
+      case 'toast': toast(msg.text, msg.level); break;
+      case 'plugins': state.plugins = msg; break;
     }
     render();
   }
 
   // ---------- 路由：每个导航项是一个独立视图 ----------
-  const views = ['overview', 'targets', 'models', 'settings'];
+  const views = ['overview', 'targets', 'models', 'plugins', 'settings'];
   function route() {
     const name = (location.hash.match(/^#\/(\w+)/) || [])[1];
     const view = views.includes(name) ? name : 'overview';
@@ -305,7 +307,7 @@
     if (document.activeElement !== $('st-iou')) $('st-iou').value = s.iou;
     $('st-conf-v').textContent = nf(2).format($('st-conf').value);
     $('st-iou-v').textContent = nf(2).format($('st-iou').value);
-    document.querySelectorAll('.segmented button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.mode === s.mode)));
+    document.querySelectorAll('#view-settings .segmented button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.mode === s.mode)));
     $('st-overlay').setAttribute('aria-checked', String(s.overlay));
     $('st-graph').setAttribute('aria-checked', String(s.cudaGraph));
     $('st-realtime').setAttribute('aria-checked', String(!!s.gpuRealtime));
@@ -323,9 +325,107 @@
     render();
   }
 
+  // ---------- 插件（扩展机制方案 5.5、第 6 节） ----------
+  const pluginStateText = { running: '运行中', stopped: '已停止', stopping: '正在停止', backoff: '等待重启', failed: '失败', incompatible: '不兼容', invalid: '清单无效' };
+  const pluginPill = { running: 'running', stopping: 'preparing', backoff: 'preparing', failed: 'failed', incompatible: 'failed', invalid: 'failed' };
+  const metricText = (v) => (typeof v === 'number' ? nf(Number.isInteger(v) ? 0 : Math.min(3, (String(v).split('.')[1] || '').length)).format(v) : String(v ?? '—'));
+  const timeText = (t) => new Date(t).toLocaleTimeString('zh-CN', { hour12: false });
+  // 数值设置按步长的小数位显示（步长 0.05 → 两位）
+  const stepText = (v, step) => (step ? nf(Math.min(6, (String(step).split('.')[1] || '').length)).format(v) : metricText(v));
+  let settingsFormKey = '';  // 已生成的设置表单对应的插件与值；用户编辑期间不重建
+
+  const selectedPlugin = () => state.plugins.items.find((p) => p.id === state.selectedPlugin) || state.plugins.items[0] || null;
+
+  function renderPlugins() {
+    const items = state.plugins.items;
+    const running = items.filter((p) => p.state === 'running').length;
+    $('pl-sub').textContent = items.length ? `${items.length} 个插件 · ${running} 个运行中 · 插件协议版本 ${state.plugins.api}` : '没有找到插件';
+    $('pll-count').textContent = `${items.length} 个`;
+    $('pll-note').textContent = state.plugins.userDir ? `安装插件：把含 plugin.json 的文件夹放入 ${state.plugins.userDir}，然后重新扫描。` : '';
+    const sel = selectedPlugin();
+    $('pll-rows').innerHTML = items.map((p) => `<tr data-plugin="${esc(p.id)}" aria-selected="${!!sel && p.id === sel.id}" style="cursor:pointer">
+        <td class="name"><span>${esc(p.name)}</span><div class="muted" style="font-size:12px;line-height:16px;overflow:hidden;text-overflow:ellipsis">${esc(p.version ? `${p.id} · ${p.version}` : p.id)}</div></td>
+        <td><span class="pill ${pluginPill[p.state] || ''}">${esc(pluginStateText[p.state] || p.state)}</span></td>
+        <td class="num"><button class="switch" type="button" role="switch" data-enable="${esc(p.id)}" aria-checked="${p.enabled}" aria-label="启用${esc(p.name)}"${p.compatible ? '' : ' disabled'}></button></td></tr>`).join('')
+      || '<tr><td colspan="3" class="muted">插件目录中没有插件</td></tr>';
+    $('pld').hidden = !sel;
+    if (sel) renderPluginDetail(sel);
+  }
+
+  function renderPluginDetail(p) {
+    $('pld-name').textContent = p.name;
+    $('pld-version').textContent = p.version ? `版本 ${p.version}` : '';
+    $('pld-desc').textContent = p.description || '';
+    $('pld-pill').className = `pill ${pluginPill[p.state] || ''}`;
+    $('pld-pill').textContent = pluginStateText[p.state] || p.state;
+    $('pld-status').textContent = p.status || '';
+    $('pld-error').hidden = !p.error;
+    $('pld-error').textContent = p.error || '';
+    const kv = [
+      ['标识', p.id], ['来源', p.source === 'user' ? '用户安装' : '程序自带'],
+      ['插件协议', p.compatible ? `版本 ${p.api}` : `需要版本 ${p.api}，宿主支持 ${state.plugins.api}`],
+      ['入口', p.command || '—'], ['进程号', p.pid || '—'], ['重启次数', p.restarts], ['目录', p.dir],
+    ];
+    $('pld-kv').innerHTML = kv.map(([k, v]) => `<dt>${k}</dt><dd title="${esc(v)}">${esc(v)}</dd>`).join('');
+    $('pld-metrics-wrap').hidden = !p.metrics.length;
+    $('pld-metrics').innerHTML = p.metrics.map((m) => `<div class="kpi"><div class="label">${esc(m.label)}</div>
+      <div class="value">${esc(metricText(m.value))}${m.unit ? `<span class="unit">${esc(m.unit)}</span>` : ''}</div></div>`).join('');
+    renderPluginSettings(p);
+    const log = $('pld-log');
+    const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 8;
+    log.innerHTML = p.logs.map((l) => `<span class="${esc(l.level)}"><span class="t">${timeText(l.t)}</span>  ${esc(l.text)}</span>`).join('\n');
+    if (atBottom) log.scrollTop = log.scrollHeight;
+    $('pld-restart').disabled = !p.compatible || !p.enabled;
+  }
+
+  function renderPluginSettings(p) {
+    const schema = p.settingsSchema || [];
+    $('pld-settings-wrap').hidden = !schema.length;
+    const box = $('pld-settings');
+    const key = `${p.id}|${JSON.stringify(schema)}|${JSON.stringify(p.settings)}`;
+    if (key === settingsFormKey || box.contains(document.activeElement)) return;
+    settingsFormKey = key;
+    box.innerHTML = schema.map((s) => settingHtml(s, p.settings[s.key])).join('');
+  }
+
+  // 按插件清单的设置项声明生成表单控件
+  function settingHtml(s, v) {
+    const label = esc(s.label || s.key), k = esc(s.key), id = `pls-${k}`;
+    const hint = s.description ? `<div class="hint">${esc(s.description)}</div>` : '';
+    if (s.type === 'boolean') {
+      return `<div class="switch-row"><div><div class="title">${label}</div>${s.description ? `<div class="desc">${esc(s.description)}</div>` : ''}</div>
+        <button class="switch" type="button" role="switch" data-setting="${k}" aria-checked="${!!v}" aria-label="${label}"></button></div>`;
+    }
+    if (s.type === 'number') {
+      const ranged = s.min != null && s.max != null;
+      const input = ranged
+        ? `<input type="range" id="${id}" data-setting="${k}" min="${s.min}" max="${s.max}" step="${s.step ?? 'any'}" value="${v}">`
+        : `<input class="text-input" type="number" id="${id}" data-setting="${k}" step="${s.step ?? 'any'}" value="${v}">`;
+      return `<div class="field"><label for="${id}"><span>${label}</span>${ranged ? `<span class="value" data-value-for="${k}" data-step="${s.step ?? ''}">${stepText(v, s.step)}</span>` : ''}</label>${input}${hint}</div>`;
+    }
+    if (s.type === 'enum') {
+      const buttons = s.options.map((o) => `<button type="button" data-setting="${k}" data-option="${esc(JSON.stringify(o.value))}"
+        aria-pressed="${JSON.stringify(o.value) === JSON.stringify(v)}">${esc(o.label ?? o.value)}</button>`).join('');
+      return `<div class="field"><div class="label"><span>${label}</span></div><div class="segmented" role="group" aria-label="${label}">${buttons}</div>${hint}</div>`;
+    }
+    return `<div class="field"><label for="${id}"><span>${label}</span></label><input class="text-input" type="text" id="${id}" data-setting="${k}" value="${esc(v ?? '')}">${hint}</div>`;
+  }
+
+  let pluginSavedTimer = 0;
+  function savePluginSetting(name, value) {
+    const p = selectedPlugin();
+    if (!p) return;
+    p.settings = { ...p.settings, [name]: value };
+    send('setPluginSettings', { id: p.id, settings: p.settings });
+    $('pld-saved').classList.add('show');
+    clearTimeout(pluginSavedTimer);
+    pluginSavedTimer = setTimeout(() => $('pld-saved').classList.remove('show'), 1600);
+  }
+
   // ---------- 提示 ----------
   let toastTimer = 0;
-  function toast(text) {
+  function toast(text, level = 'error') {
+    $('toast').className = `toast ${level}`;
     $('toast-text').textContent = text;
     $('toast').classList.add('show');
     clearTimeout(toastTimer);
@@ -337,6 +437,7 @@
     if (!$('view-overview').hidden) renderOverview();
     if (!$('view-targets').hidden) renderTargets();
     if (!$('view-models').hidden) renderModels();
+    if (!$('view-plugins').hidden) renderPlugins();
     if (!$('view-settings').hidden) renderSettings();
   }
 
@@ -361,11 +462,50 @@
   $('st-iou').addEventListener('input', () => { $('st-iou-v').textContent = nf(2).format($('st-iou').value); });
   $('st-conf').addEventListener('change', () => saveSettings({ conf: Number($('st-conf').value) }));
   $('st-iou').addEventListener('change', () => saveSettings({ iou: Number($('st-iou').value) }));
-  document.querySelectorAll('.segmented button').forEach((b) => b.addEventListener('click', () => saveSettings({ mode: b.dataset.mode })));
+  document.querySelectorAll('#view-settings .segmented button').forEach((b) => b.addEventListener('click', () => saveSettings({ mode: b.dataset.mode })));
   $('st-overlay').addEventListener('click', () => saveSettings({ overlay: !state.settings.overlay }));
   $('st-graph').addEventListener('click', () => saveSettings({ cudaGraph: !state.settings.cudaGraph }));
   $('st-realtime').addEventListener('click', () => saveSettings({ gpuRealtime: !state.settings.gpuRealtime }));
   $('st-publish').addEventListener('click', () => saveSettings({ publishResults: !state.settings.publishResults }));
+  $('pl-rescan').addEventListener('click', () => send('rescanPlugins'));
+  $('pl-open').addEventListener('click', () => send('openPluginDir'));
+  $('pld-open').addEventListener('click', () => { const p = selectedPlugin(); if (p) send('openPluginDir', { id: p.id }); });
+  $('pld-restart').addEventListener('click', () => { const p = selectedPlugin(); if (p) send('restartPlugin', { id: p.id }); });
+  $('pll-rows').addEventListener('click', (e) => {
+    const sw = e.target.closest('[data-enable]');
+    if (sw) {
+      if (!sw.disabled) send('setPluginEnabled', { id: sw.dataset.enable, enabled: sw.getAttribute('aria-checked') !== 'true' });
+      return;
+    }
+    const row = e.target.closest('tr[data-plugin]');
+    if (row && row.dataset.plugin !== state.selectedPlugin) {
+      state.selectedPlugin = row.dataset.plugin;
+      settingsFormKey = '';
+      renderPlugins();
+    }
+  });
+  $('pld-settings').addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-setting]');
+    if (!b) return;
+    if (b.classList.contains('switch')) {
+      const v = b.getAttribute('aria-checked') !== 'true';
+      b.setAttribute('aria-checked', String(v));
+      savePluginSetting(b.dataset.setting, v);
+    } else {
+      b.parentElement.querySelectorAll('button').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+      savePluginSetting(b.dataset.setting, JSON.parse(b.dataset.option));
+    }
+  });
+  $('pld-settings').addEventListener('input', (e) => {
+    if (e.target.type !== 'range') return;
+    const shown = $('pld-settings').querySelector(`[data-value-for="${CSS.escape(e.target.dataset.setting)}"]`);
+    if (shown) shown.textContent = stepText(Number(e.target.value), Number(shown.dataset.step) || 0);
+  });
+  $('pld-settings').addEventListener('change', (e) => {
+    const t = e.target;
+    if (!t.dataset || !t.dataset.setting || t.tagName !== 'INPUT') return;
+    savePluginSetting(t.dataset.setting, t.type === 'text' ? t.value : Number(t.value));
+  });
   window.addEventListener('hashchange', route);
   window.addEventListener('resize', () => { if (!$('view-overview').hidden) renderLatencyChart(); });
 

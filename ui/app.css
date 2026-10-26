@@ -231,6 +231,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); height: 20px; }
 .switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--text); transition: transform var(--t-hover) var(--ease-out); }
 .switch[aria-checked="true"] { background: var(--accent); }
 .switch[aria-checked="true"]::after { transform: translateX(14px); background: #0d0d0f; }
+.switch:disabled { opacity: 0.4; cursor: not-allowed; }
 .saved { color: var(--muted); font-size: var(--fs-small); opacity: 0; transition: opacity 200ms; }
 .saved.show { opacity: 1; }
 
@@ -244,11 +245,32 @@ input[type="range"] { width: 100%; accent-color: var(--accent); height: 20px; }
 .classes li { break-inside: avoid; display: flex; gap: 10px; height: 24px; align-items: center; }
 .classes .id { width: 22px; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
 
+/* ---------- 插件 ---------- */
+.card-note { color: var(--muted); font-size: var(--fs-small); margin-top: 14px; overflow-wrap: anywhere; }
+.plugin-state { display: flex; align-items: center; gap: 10px; margin: 14px 0 4px; min-width: 0; }
+.plugin-state > span:last-child { color: var(--muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plugin-error { color: var(--negative); margin: 8px 0 0; overflow-wrap: anywhere; }
+#pld .kv { margin-top: 12px; }
+#pld .section-title { margin-top: 20px; }
+.section-title .saved { font-size: var(--fs-small); margin-left: 8px; }
+.kpis.wrap { flex-wrap: wrap; row-gap: 14px; margin-bottom: 0; }
+.plugin-settings .field + .switch-row, .plugin-settings .switch-row + .field { margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--rule); }
+.plugin-settings .field + .field { padding-top: 20px; border-top: 1px solid var(--rule); }
+.text-input { width: 100%; height: var(--control-height); padding: 0 14px; background: var(--ground); border: 1px solid var(--control); border-radius: var(--radius-control); color: var(--text); }
+.text-input:focus { border-color: #55555a; outline: none; }
+.log { margin: 0; max-height: 240px; overflow: auto; padding: 10px 12px; background: var(--ground); border-radius: 4px; font: 12px/18px "Cascadia Mono", Consolas, "Microsoft YaHei UI", monospace; color: #c9c9cc; white-space: pre-wrap; overflow-wrap: anywhere; }
+.log .t { color: #5c5d63; }
+.log .warning { color: var(--warning); }
+.log .error { color: var(--negative); }
+.log:empty::before { content: "暂无日志"; color: var(--muted); }
+
 /* ---------- 提示 ---------- */
 /* taste-skill-ignore: 提示浮在内容之上 */
 .toast { position: fixed; right: 24px; bottom: 24px; max-width: 420px; padding: 12px 16px; background: var(--raised); border-radius: 6px; box-shadow: var(--shadow); display: flex; gap: 10px; align-items: flex-start; z-index: 10; transform: translateY(8px); opacity: 0; transition: opacity 200ms, transform 200ms var(--ease-out); }
 .toast.show { opacity: 1; transform: none; }
 .toast .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--negative); margin-top: 6px; flex: none; }
+.toast.info .dot { background: var(--accent); }
+.toast.warning .dot { background: var(--warning); }
 
 /* ---------- 加载中：在真实布局位置放灰条 ---------- */
 .skeleton { display: inline-block; background: var(--raised); border-radius: 3px; color: transparent !important; }

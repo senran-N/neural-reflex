@@ -4,11 +4,13 @@
 // 只在界面线程调用；实时处理在 Session 的线程中进行。
 
 #include "pipeline/session.h"
+#include "plugin_host.h"
 #include "targets.h"
 
 #include <filesystem>
 #include <functional>
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -38,6 +40,7 @@ struct AppSettings {
   bool gpuRealtime = false;  // 进程 GPU 调度优先级设为实时级（设计方案 6.4）
   bool publishResults = false;  // 结果写入共享内存（扩展机制方案第 5 节）
   std::wstring lastTargetExe;
+  nlohmann::json plugins = nlohmann::json::object();  // 插件启用状态与设置（插件宿主创建前的读取结果）
 };
 
 class Controller {
@@ -55,6 +58,7 @@ class Controller {
   void SendTargets();
   void SendModels();
   void SendStats();
+  void SendPlugins();
   void Toast(const std::string& level, const std::string& text);
 
   void SelectModel(const std::filesystem::path& path);
@@ -80,6 +84,9 @@ class Controller {
   SessionPhase lastPhase_ = SessionPhase::kIdle;
   double lastSentSecond_ = -1;
   std::string gpuName_;
+
+  std::unique_ptr<PluginHost> plugins_;
+  uint64_t sentPluginsVersion_ = 0;
 };
 
 }  // namespace nr::app

@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "id": "target-alert",
+  "name": "目标告警",
+  "version": "0.1.0",
+  "description": "指定类别的目标连续出现一段时间后发出提示，并可把告警记录到 CSV。",
+  "api": 1,
+  "entry": { "command": "python", "args": ["main.py"] },
+  "settings": [
+    { "key": "classes", "type": "string", "label": "告警类别", "description": "类别名称，多个用逗号分隔", "default": "person" },
+    { "key": "minScore", "type": "number", "label": "最低置信度", "min": 0.05, "max": 0.95, "step": 0.05, "default": 0.5 },
+    { "key": "minCount", "type": "number", "label": "最少目标数", "description": "同一帧中达到这个数量才算出现", "min": 1, "max": 50, "step": 1, "default": 1 },
+    { "key": "holdFrames", "type": "number", "label": "持续帧数", "description": "连续出现这么多帧才告警", "min": 1, "max": 1440, "step": 1, "default": 30 },
+    { "key": "cooldown", "type": "number", "label": "告警间隔（秒）", "min": 1, "max": 600, "step": 1, "default": 10 },
+    { "key": "sound", "type": "enum", "label": "提示音", "options": [ { "value": "none", "label": "无" }, { "value": "beep", "label": "系统提示音" } ], "default": "none" },
+    { "key": "record", "type": "boolean", "label": "记录到 CSV", "description": "写入插件数据目录下的 alerts.csv", "default": true }
+  ]
+}

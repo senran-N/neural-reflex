@@ -93,6 +93,7 @@ if(NR_ENABLE_CUDA)
     apps/neural_reflex/main.cpp
     apps/neural_reflex/controller.cpp
     apps/neural_reflex/targets.cpp
+    apps/neural_reflex/plugin_host.cpp
     apps/neural_reflex/app.rc
     apps/neural_reflex/app.manifest
   )
@@ -108,6 +109,9 @@ if(NR_ENABLE_CUDA)
   install(TARGETS NeuralReflex RUNTIME DESTINATION .)
   install(FILES $<TARGET_FILE:TRTRTX::tensorrt> $<TARGET_FILE:TRTRTX::nvonnxparser> DESTINATION .)
   install(DIRECTORY ui/ DESTINATION ui)
+  # 外部进程插件：示例插件与 Python SDK（扩展机制方案 5.5）
+  install(DIRECTORY plugins/ DESTINATION plugins PATTERN "__pycache__" EXCLUDE)
+  install(DIRECTORY sdk/python/ DESTINATION sdk/python PATTERN "__pycache__" EXCLUDE)
   install(FILES models/reference/yolo26n-640-nms-fp16.onnx models/reference/yolo26n-640-nms-fp32.json
           DESTINATION models OPTIONAL)
   install(FILES LICENSE THIRD_PARTY_NOTICES.md DESTINATION . OPTIONAL)

@@ -3,6 +3,7 @@
 #include "common/d3d_util.h"
 
 #include <nlohmann/json.hpp>
+#include <shellapi.h>
 #include <shobjidl.h>
 #include <wrl/client.h>
 
@@ -46,6 +47,22 @@ Controller::Controller(Sender send, std::filesystem::path appDir, std::filesyste
   }
   if (!settings_.model.empty()) model_ = ReadModel(settings_.model);
 
+  // 外部进程插件（扩展机制方案 5.5）：程序目录、源码树（开发时）、用户目录，后者覆盖前者
+  {
+    const auto repo = appDir_.parent_path().parent_path().parent_path();
+    std::vector<std::filesystem::path> dirs = {appDir_ / "plugins"};
+    std::error_code ec;
+    if (std::filesystem::is_directory(repo / "plugins", ec) &&
+        !std::filesystem::equivalent(repo / "plugins", appDir_ / "plugins", ec)) {
+      dirs.push_back(repo / "plugins");
+    }
+    dirs.push_back(dataDir_ / "plugins");
+    const auto sdk = std::filesystem::exists(appDir_ / "sdk" / "python") ? appDir_ / "sdk" / "python"
+                                                                         : repo / "sdk" / "python";
+    plugins_ = std::make_unique<PluginHost>(dirs, dataDir_, sdk);
+    plugins_->Start(settings_.plugins);
+  }
+
   // 上次的目标程序仍在运行时自动选中
   if (!settings_.lastTargetExe.empty()) {
     for (const auto& w : ListWindows(GetCurrentProcessId())) {
@@ -67,6 +84,7 @@ Controller::Controller(Sender send, std::filesystem::path appDir, std::filesyste
 Controller::~Controller() {
   session_.Stop();
   SaveSettings();
+  plugins_.reset();  // 请求插件退出，宽限期后结束进程
 }
 
 void Controller::OnMessage(const std::string& text, HWND owner) {
@@ -82,6 +100,31 @@ void Controller::OnMessage(const std::string& text, HWND owner) {
       SendState();
       SendTargets();
       SendModels();
+      SendPlugins();
+    } else if (cmd == "setPluginEnabled") {
+      const bool enabled = msg.at("enabled").get<bool>();
+      plugins_->SetEnabled(msg.at("id").get<std::string>(), enabled);
+      SaveSettings();
+      // 插件依赖结果共享；运行中的会话未发布时重新启动以开启
+      if (enabled && session_.Active() && !session_.Snapshot(0).publishing) {
+        Start();
+        Toast("info", "已重新启动检测，以便插件读取结果");
+      }
+      SendPlugins();
+    } else if (cmd == "setPluginSettings") {
+      plugins_->SetSettings(msg.at("id").get<std::string>(), msg.at("settings"));
+      SaveSettings();
+      SendPlugins();
+    } else if (cmd == "restartPlugin") {
+      plugins_->Restart(msg.at("id").get<std::string>());
+      SendPlugins();
+    } else if (cmd == "rescanPlugins") {
+      plugins_->Rescan();
+      SendPlugins();
+    } else if (cmd == "openPluginDir") {
+      const std::string id = msg.value("id", "");
+      const auto dir = id.empty() ? plugins_->UserDir() : plugins_->PluginDir(id);
+      ShellExecuteW(owner, L"open", dir.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
     } else if (cmd == "refreshTargets") {
       SendTargets();
     } else if (cmd == "selectWindow") {
@@ -147,6 +190,13 @@ void Controller::OnTimer() {
     if (s.phase == SessionPhase::kRunning && !s.publishError.empty()) Toast("warning", "结果共享未开启：" + s.publishError);
   }
   if (s.phase == SessionPhase::kRunning || s.phase == SessionPhase::kPreparing) SendStats();
+  if (plugins_->Version() != sentPluginsVersion_) SendPlugins();
+  for (const auto& n : plugins_->TakeNotifications()) Toast("info", n.plugin + "：" + n.text);
+}
+
+void Controller::SendPlugins() {
+  sentPluginsVersion_ = plugins_->Version();
+  send_(plugins_->Snapshot().dump());
 }
 
 void Controller::Start() {
@@ -168,7 +218,7 @@ void Controller::Start() {
   config.detector.iouThreshold = settings_.iou;
   config.overlay = settings_.overlay;
   config.gpuPriority = settings_.gpuRealtime ? GpuPriority::kRealtime : GpuPriority::kNormal;
-  config.publishResults = settings_.publishResults;
+  config.publishResults = settings_.publishResults || plugins_->AnyEnabled();
   lastSentSecond_ = -1;
   session_.Start(config);
   lastPhase_ = SessionPhase::kPreparing;
@@ -416,6 +466,7 @@ void Controller::LoadSettings() {
     settings_.cudaGraph = j.value("cudaGraph", settings_.cudaGraph);
     settings_.gpuRealtime = j.value("gpuRealtime", settings_.gpuRealtime);
     settings_.publishResults = j.value("publishResults", settings_.publishResults);
+    settings_.plugins = j.value("plugins", json::object());
     settings_.lastTargetExe = FromUtf8(j.value("lastTargetExe", std::string()));
   } catch (const std::exception&) {
   }
@@ -430,6 +481,7 @@ void Controller::SaveSettings() const {
                   {"cudaGraph", settings_.cudaGraph},
                   {"gpuRealtime", settings_.gpuRealtime},
                   {"publishResults", settings_.publishResults},
+                  {"plugins", plugins_ ? plugins_->Saved() : settings_.plugins},
                   {"lastTargetExe", ToUtf8(settings_.lastTargetExe)}};
   std::ofstream f(dataDir_ / "settings.json");
   f << j.dump(2);

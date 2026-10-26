@@ -22,6 +22,10 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/></svg>
       <span class="tip">模型</span>
     </a>
+    <a href="#/plugins" data-view="plugins" aria-label="插件">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M9 3v4M15 3v4"/><path d="M6 7h12v3a6 6 0 0 1-12 0z"/><path d="M12 16v5"/></svg>
+      <span class="tip">插件</span>
+    </a>
     <span class="spacer"></span>
     <a href="#/settings" data-view="settings" aria-label="设置">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></svg>
@@ -161,6 +165,48 @@
       </div>
     </section>
 
+    <!-- 插件：外部进程插件的管理（扩展机制方案 5.5、第 6 节） -->
+    <section class="view" id="view-plugins" aria-labelledby="pl-h1" hidden>
+      <header class="title-row">
+        <div class="identity"><div><h1 id="pl-h1">插件</h1><p class="sub" id="pl-sub">—</p></div></div>
+        <div class="actions">
+          <button class="btn" type="button" id="pl-rescan">重新扫描</button>
+          <button class="btn" type="button" id="pl-open">打开插件目录</button>
+        </div>
+      </header>
+      <div class="grid">
+        <article class="card span-5" aria-labelledby="pll-title">
+          <div class="card-head"><h2 id="pll-title">已安装</h2><span class="meta" id="pll-count">—</span></div>
+          <table class="list">
+            <thead><tr><th>名称</th><th>状态</th><th class="num">启用</th></tr></thead>
+            <tbody id="pll-rows"></tbody>
+          </table>
+          <p class="card-note" id="pll-note">—</p>
+        </article>
+        <article class="card span-7" aria-labelledby="pld-name" id="pld">
+          <div class="card-head"><h2 id="pld-name">—</h2><span class="meta" id="pld-version"></span></div>
+          <p class="muted" id="pld-desc"></p>
+          <div class="plugin-state"><span class="pill" id="pld-pill">—</span><span id="pld-status"></span></div>
+          <p class="plugin-error" id="pld-error" hidden></p>
+          <dl class="kv" id="pld-kv"></dl>
+          <div id="pld-metrics-wrap">
+            <h3 class="section-title">指标</h3>
+            <div class="kpis wrap" id="pld-metrics"></div>
+          </div>
+          <div id="pld-settings-wrap">
+            <h3 class="section-title">设置 <span class="saved" id="pld-saved">已保存，插件已重启</span></h3>
+            <div class="plugin-settings" id="pld-settings"></div>
+          </div>
+          <h3 class="section-title">日志</h3>
+          <pre class="log" id="pld-log" tabindex="0" aria-label="插件日志"></pre>
+          <div class="card-foot">
+            <button class="btn" type="button" id="pld-restart">重启</button>
+            <button class="btn text" type="button" id="pld-open">打开所在目录</button>
+          </div>
+        </article>
+      </div>
+    </section>
+
     <!-- 设置 -->
     <section class="view settings" id="view-settings" aria-labelledby="st-h1" hidden>
       <header class="title-row">
@@ -218,7 +264,7 @@
         <div><h2>结果共享</h2><p class="desc">让其他程序读取每帧检测结果，用于告警、记录或联动。切换后运行中的会话会重新启动。</p></div>
         <div class="panel">
           <div class="switch-row">
-            <div><div class="title">发布到共享内存</div><div class="desc">写入 Local\NeuralReflex.Results.v1，任意语言均可读取；读取示例见 tools/results/read_results.py。同一时间只有一个进程能发布。</div></div>
+            <div><div class="title">发布到共享内存</div><div class="desc">写入 Local\NeuralReflex.Results.v1，任意语言均可读取；读取示例见 tools/results/read_results.py。同一时间只有一个进程能发布。启用了插件时自动开启。</div></div>
             <button class="switch" type="button" role="switch" id="st-publish" aria-checked="false" aria-label="发布到共享内存"></button>
           </div>
         </div>
