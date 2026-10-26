@@ -23,8 +23,10 @@ cmake --install build --config Release --prefix dist/NeuralReflex
 | `src/common` | QPC 时钟、适配器选择、帧标签编解码、矩形批量绘制、最新值交接 |
 | `src/capture` | Windows.Graphics.Capture（窗口 / 显示器）与 DXGI Desktop Duplication |
 | `src/overlay` | DirectComposition 透明覆盖层，可等待交换链，最大帧延迟 1 |
-| `apps/neural_reflex` | 桌面程序：WebView2 界面宿主、目标枚举、设置持久化、插件托管 |
-| `src/pipeline` | 检测会话：工作线程、覆盖层线程、每秒统计；结果发布到共享内存 |
+| `apps/neural_reflex` | 桌面程序：WebView2 界面宿主、目标枚举、设置持久化 |
+| `src/pipeline` | 检测会话：工作线程、覆盖层线程、每秒统计 |
+| `src/results` | 结果发布：共享内存、通知事件与环形缓冲（不依赖 CUDA） |
+| `src/plugins` | 外部进程插件的托管：发现与校验、进程与重启策略、控制通道、日志与诊断（不依赖 CUDA） |
 | `src/inference` | D3D11/CUDA 交接、GPU 预处理、TensorRT for RTX 引擎、模型清单与输出解码器 |
 | `ui` | 界面（HTML/CSS/JS）；在浏览器中直接打开时使用示例数据 |
 | `apps/nr_detect` | 命令行检测：实时模式，或 `--image-list` 离线模式用于与 Python 参考对比 |
@@ -32,7 +34,10 @@ cmake --install build --config Release --prefix dist/NeuralReflex
 | `tools/nr_testsource` | 合成测试源：移动目标 + 左上角帧标签（帧号、生成时刻、目标框） |
 | `tools/model_export` | 模型导出为 ONNX 并写出模型清单；Python 参考流水线与精度对比 |
 | `tools/results` | 结果共享的读取示例（只依赖 Python 标准库） |
-| `plugins`、`sdk/python` | 示例插件与 Python 插件 SDK |
+| `plugins` | 示例插件：`target-alert`（告警）、`result-recorder`（记录）、`udp-forward`（转发，C++） |
+| `sdk/python`、`sdk/cpp` | 插件 SDK：Python（只依赖标准库）与 C++（只有头文件，依赖 nlohmann/json） |
+| `tools/nr_publish`、`tools/nr_plugin_run` | 插件开发工具：合成或回放结果发布；命令行托管单个插件 |
+| `tests/plugins` | 插件协议测试（只依赖 Python 标准库） |
 | `tools/bench`、`tools/nr_gpuload` | 并行负载下的检测测量与可控 GPU 负载 |
 
 ## 构建
@@ -79,7 +84,15 @@ python tools/results/read_results.py --print
 
 ## 插件
 
-插件是一个含 `plugin.json` 的文件夹，由桌面程序启动和托管，通过结果共享读取每帧结果，在“插件”页中启用、配置、查看状态与日志。程序目录与源码树的 `plugins`（示例：`plugins/target-alert`）和 `%LOCALAPPDATA%\NeuralReflex\plugins` 中的插件都会被发现。清单格式、环境变量与输出协议见扩展机制方案 5.5；Python 插件可使用 `sdk/python/neural_reflex.py`。
+插件是一个含 `plugin.json` 的文件夹，由桌面程序启动和托管，通过结果共享读取每帧结果，在“插件”页中启用、配置、查看状态与日志。程序目录与源码树的 `plugins`（示例：`plugins/target-alert`）和 `%LOCALAPPDATA%\NeuralReflex\plugins` 中的插件都会被发现。清单格式、环境变量与输出协议见扩展机制方案 5.5，协议 1.1 的控制通道、环形缓冲与诊断见第 7 节；Python 插件可使用 `sdk/python/neural_reflex.py`，C++ 插件可使用 `sdk/cpp/neural_reflex.hpp`。
+
+没有 GPU 和模型也能开发插件：`nr_publish` 写入合成结果，`nr_plugin_run` 以宿主的同一个托管实现运行插件并逐行输出状态、日志与指标。
+
+```
+build\bin\Release\nr_publish.exe --fps 144 --duration 60
+build\bin\Release\nr_plugin_run.exe plugins\target-alert
+python tests/plugins/test_protocol.py
+```
 
 ## 开发环境（本机）
 
