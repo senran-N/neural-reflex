@@ -14,20 +14,18 @@ using Microsoft::WRL::ComPtr;
 class DuplicationCapture final : public CaptureSource {
  public:
   DuplicationCapture(ID3D11Device* device, IDXGIOutput* output) : device_(device), output_(output) {
-    device_->GetImmediateContext(&context_);
     DXGI_OUTPUT_DESC desc{};
     output_->GetDesc(&desc);
     origin_ = {desc.DesktopCoordinates.left, desc.DesktopCoordinates.top};
     Check(Duplicate(), "DuplicateOutput");
   }
 
-  ~DuplicationCapture() override {
-    if (holdingFrame_) duplication_->ReleaseFrame();
-  }
+  ~DuplicationCapture() override { ReleaseFrame(); }
 
   const char* Name() const override { return "Desktop Duplication"; }
 
   AcquireStatus AcquireLatest(uint32_t timeoutMs, CapturedFrame& out) override {
+    ReleaseFrame();
     if (!duplication_) return AcquireStatus::kLost;
     const int64_t deadline = QpcNow() + static_cast<int64_t>(timeoutMs) * QpcFrequency() / 1000;
 
@@ -49,21 +47,18 @@ class DuplicationCapture final : public CaptureSource {
 
       // LastPresentTime 为 0 表示只有鼠标指针更新，没有新画面
       if (info.LastPresentTime.QuadPart == 0) {
-        Release();
+        ReleaseFrame();
         if (QpcNow() >= deadline) return AcquireStatus::kTimeout;
         continue;
       }
 
-      ComPtr<ID3D11Texture2D> surface;
-      Check(resource.As(&surface), "IDXGIResource -> ID3D11Texture2D");
+      surface_.Reset();
+      Check(resource.As(&surface_), "IDXGIResource -> ID3D11Texture2D");
       D3D11_TEXTURE2D_DESC sd{};
-      surface->GetDesc(&sd);
-      EnsureOwnedTexture(sd);
-      // 复制后立即释放，缩短持有桌面帧的时间（设计方案 4.2）
-      context_->CopyResource(owned_.Get(), surface.Get());
-      Release();
+      surface_->GetDesc(&sd);
 
-      out.texture = owned_.Get();
+      // 直接交出桌面帧，使用方复制所需区域后调用 ReleaseFrame()（设计方案 4.2）
+      out.texture = surface_.Get();
       out.width = sd.Width;
       out.height = sd.Height;
       out.screenOrigin = origin_;
@@ -74,8 +69,14 @@ class DuplicationCapture final : public CaptureSource {
     }
   }
 
+  void ReleaseFrame() override {
+    surface_.Reset();
+    if (holdingFrame_ && duplication_) duplication_->ReleaseFrame();
+    holdingFrame_ = false;
+  }
+
   bool Recreate() override {
-    if (holdingFrame_) Release();
+    ReleaseFrame();
     duplication_.Reset();
     DXGI_OUTPUT_DESC desc{};
     output_->GetDesc(&desc);
@@ -96,35 +97,10 @@ class DuplicationCapture final : public CaptureSource {
     return output1->DuplicateOutput(device_, &duplication_);
   }
 
-  void Release() {
-    duplication_->ReleaseFrame();
-    holdingFrame_ = false;
-  }
-
-  void EnsureOwnedTexture(const D3D11_TEXTURE2D_DESC& sd) {
-    if (owned_) {
-      D3D11_TEXTURE2D_DESC od{};
-      owned_->GetDesc(&od);
-      if (od.Width == sd.Width && od.Height == sd.Height && od.Format == sd.Format) return;
-    }
-    D3D11_TEXTURE2D_DESC td{};
-    td.Width = sd.Width;
-    td.Height = sd.Height;
-    td.MipLevels = 1;
-    td.ArraySize = 1;
-    td.Format = sd.Format;
-    td.SampleDesc.Count = 1;
-    td.Usage = D3D11_USAGE_DEFAULT;
-    td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-    owned_.Reset();
-    Check(device_->CreateTexture2D(&td, nullptr, &owned_), "CreateTexture2D(采集副本)");
-  }
-
   ID3D11Device* device_;
-  ComPtr<ID3D11DeviceContext> context_;
   ComPtr<IDXGIOutput> output_;
   ComPtr<IDXGIOutputDuplication> duplication_;
-  ComPtr<ID3D11Texture2D> owned_;
+  ComPtr<ID3D11Texture2D> surface_;
   POINT origin_{};
   bool holdingFrame_ = false;
 };

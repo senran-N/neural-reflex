@@ -24,4 +24,13 @@ ComPtr<ID3D11Device> CreateDevice(IDXGIAdapter1* adapter, ComPtr<ID3D11DeviceCon
 
 std::wstring FormatLuid(const LUID& luid);
 
+// 硬件加速 GPU 调度（HAGS）状态（设计方案 6.4）。查询失败时 queried 为 false。
+struct HagsState {
+  bool queried = false;
+  bool supported = false;
+  bool enabled = false;
+  bool enabledByDefault = false;
+};
+HagsState QueryHags(const LUID& luid);
+
 }  // namespace nr

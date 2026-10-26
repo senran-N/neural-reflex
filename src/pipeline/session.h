@@ -4,6 +4,7 @@
 // 界面和命令行都通过 Snapshot() 轮询状态与每秒统计，不进入实时路径（设计方案 6.2）。
 
 #include "common/stats.h"
+#include "common/win_util.h"
 #include "inference/detector.h"
 
 #include <windows.h>
@@ -28,6 +29,11 @@ struct SessionConfig {
   DetectorOptions detector;
   bool overlay = true;
   double staleMs = 100;  // 超过该时间没有新结果，覆盖层清除旧框
+
+  // 以下为调度实验项（设计方案 6.2、6.4、6.5），默认值由实测决定
+  int inflight = 1;  // 同时在 GPU 上的帧数，1 或 2
+  GpuPriority gpuPriority = GpuPriority::kNormal;
+  bool mmcss = false;  // 采集与完成线程注册为 MMCSS "Games" 任务
 };
 
 enum class SessionPhase { kIdle, kPreparing, kRunning, kFailed };
@@ -46,6 +52,8 @@ struct SessionSecond {
 struct SessionSnapshot {
   SessionPhase phase = SessionPhase::kIdle;
   std::string error;  // UTF-8
+  long gpuPriorityStatus = 0;  // 设置 GPU 调度优先级的 NTSTATUS
+  int gpuPriorityEffective = -1;  // 读回的实际级别（GpuPriority 数值），-1 表示无法读取
   double elapsed = 0;
   double prepareMs = 0;
   std::string adapter;  // UTF-8

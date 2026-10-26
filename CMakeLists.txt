@@ -45,6 +45,9 @@ target_link_libraries(nr_probe PRIVATE nr_capture nr_overlay)
 add_executable(nr_testsource tools/nr_testsource/main.cpp)
 target_link_libraries(nr_testsource PRIVATE nr_common)
 
+add_executable(nr_gpuload tools/nr_gpuload/main.cpp)
+target_link_libraries(nr_gpuload PRIVATE nr_common)
+
 if(NR_ENABLE_CUDA)
   enable_language(CUDA)
   # 自有内核覆盖 Turing 到 Blackwell，并附带 PTX 以便向前兼容
@@ -68,7 +71,7 @@ if(NR_ENABLE_CUDA)
                                             TRTRTX::nvonnxparser)
 
   add_library(nr_pipeline STATIC src/pipeline/session.cpp)
-  target_link_libraries(nr_pipeline PUBLIC nr_inference nr_capture nr_overlay)
+  target_link_libraries(nr_pipeline PUBLIC nr_inference nr_capture nr_overlay avrt)
 
   add_executable(nr_detect apps/nr_detect/main.cpp)
   target_link_libraries(nr_detect PRIVATE nr_pipeline)

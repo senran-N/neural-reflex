@@ -7,12 +7,17 @@
 #include "common/qpc.h"
 #include "common/win_util.h"
 #include "inference/d3d_cuda_interop.h"
+#include "inference/cuda_check.h"
 #include "overlay/overlay.h"
+
+#include <avrt.h>
 
 #include <unknwn.h>
 #include <winrt/base.h>
 
 #include <algorithm>
+#include <chrono>
+#include <condition_variable>
 #include <exception>
 #include <iterator>
 #include <memory>
@@ -145,17 +150,70 @@ void Session::Fail(const std::string& message) {
   state_.error = message;
 }
 
+namespace {
+
+// 采集线程与完成线程之间的在途项
+struct InFlight {
+  int slot = 0;
+  int64_t acquireQpc = 0;
+};
+
+class MmcssScope {
+ public:
+  explicit MmcssScope(bool enable) {
+    if (enable) handle_ = AvSetMmThreadCharacteristicsW(L"Games", &index_);
+  }
+  ~MmcssScope() {
+    if (handle_) AvRevertMmThreadCharacteristics(handle_);
+  }
+
+ private:
+  HANDLE handle_ = nullptr;
+  DWORD index_ = 0;
+};
+
+}  // namespace
+
 void Session::Run(SessionConfig config) {
-  SetCurrentThreadName(L"nr-session");
+  SetCurrentThreadName(L"nr-capture");
+  MmcssScope mmcss(config.mmcss);
   std::atomic<bool> overlayStop{false}, overlayFailed{false};
   std::atomic<uint64_t> presents{0};
   std::string overlayError;
-  std::thread overlayThread;
+  std::thread overlayThread, completionThread;
+
+  // 在途队列
+  std::mutex queueMutex;
+  std::condition_variable queueCv;
+  std::deque<InFlight> queue;
+  int inflight = 0;
+  bool producerDone = false;
+  std::exception_ptr completionError;
+  const int maxInflight = std::clamp(config.inflight, 1, Detector::kSlots);
+
+  auto shutdown = [&] {
+    {
+      std::lock_guard lock(queueMutex);
+      producerDone = true;
+    }
+    queueCv.notify_all();
+    if (completionThread.joinable()) completionThread.join();
+    overlayStop = true;
+    if (overlayThread.joinable()) overlayThread.join();
+  };
+
   try {
     try {
       winrt::init_apartment(winrt::apartment_type::multi_threaded);
     } catch (const winrt::hresult_error&) {
       // 线程已在其他套间中初始化
+    }
+
+    const long priorityStatus = SetGpuPriority(config.gpuPriority);
+    {
+      std::lock_guard lock(mutex_);
+      state_.gpuPriorityStatus = priorityStatus;
+      state_.gpuPriorityEffective = GetGpuPriority();
     }
 
     HWND window = config.window;
@@ -173,7 +231,8 @@ void Session::Run(SessionConfig config) {
     adapter.adapter.As(&adapter3);
 
     const int64_t prepareStart = QpcNow();
-    Detector detector(device.Get(), CudaDeviceForLuid(adapter.luid), config.detector);
+    const int cudaDevice = CudaDeviceForLuid(adapter.luid);
+    Detector detector(device.Get(), cudaDevice, config.detector);
 
     std::unique_ptr<CaptureSource> source;
     if (config.mode == CaptureMode::kDuplication) {
@@ -184,12 +243,81 @@ void Session::Run(SessionConfig config) {
       source = CreateWgcMonitorCapture(device.Get(), monitor);
     }
 
-    LatestSlot<OverlayFrame> slot;
+    LatestSlot<OverlayFrame> overlaySlot;
     if (config.overlay) {
-      overlayThread = std::thread(OverlayLoop, adapter.adapter.Get(), mi.rcMonitor, std::cref(slot),
+      overlayThread = std::thread(OverlayLoop, adapter.adapter.Get(), mi.rcMonitor, std::cref(overlaySlot),
                                   std::cref(overlayStop), config.staleMs, std::ref(presents),
                                   std::ref(overlayFailed), std::ref(overlayError));
     }
+
+    // 本秒统计：完成线程写入，采集线程每秒汇总一次（均在 mutex_ 下）
+    uint32_t secOverflow = 0;
+    std::vector<double> secLatency, secPre, secInfer, secPost;
+    double secBoxes = 0;
+
+    // 完成线程：按提交顺序等待结果并发布，不阻塞采集
+    completionThread = std::thread([&] {
+      SetCurrentThreadName(L"nr-complete");
+      MmcssScope completionMmcss(config.mmcss);
+      try {
+        CudaCheck(cudaSetDevice(cudaDevice), "cudaSetDevice");
+        OverlayFrame frameOut;
+        for (;;) {
+          InFlight item;
+          {
+            std::unique_lock lock(queueMutex);
+            queueCv.wait(lock, [&] { return !queue.empty() || producerDone; });
+            if (queue.empty()) return;
+            item = queue.front();
+            queue.pop_front();
+          }
+          StageTimes t;
+          const DetectionOutput& r = detector.Wait(item.slot, &t);
+          const double ms = QpcToMs(QpcNow() - item.acquireQpc);
+
+          frameOut.boxes.clear();
+          frameOut.classes.clear();
+          std::map<int, int> classes;
+          for (int i = 0; i < r.count; ++i) {
+            const Detection& d = r.detections[i];
+            frameOut.boxes.push_back({static_cast<LONG>(d.x1), static_cast<LONG>(d.y1), static_cast<LONG>(d.x2),
+                                      static_cast<LONG>(d.y2)});
+            frameOut.classes.push_back(d.cls);
+            ++classes[d.cls];
+          }
+          frameOut.acquireQpc = item.acquireQpc;
+          if (config.overlay) overlaySlot.Publish(frameOut);
+          const bool overflow = r.overflow > 0;
+          const int count = r.count;
+
+          {
+            std::lock_guard lock(queueMutex);
+            --inflight;
+          }
+          queueCv.notify_all();
+
+          std::lock_guard lock(mutex_);
+          secLatency.push_back(ms);
+          secPre.push_back(t.preprocessMs);
+          secInfer.push_back(t.inferenceMs);
+          secPost.push_back(t.postprocessMs);
+          secBoxes += count;
+          if (overflow) ++secOverflow;
+          latency_.Add(ms);
+          pre_.Add(t.preprocessMs);
+          infer_.Add(t.inferenceMs);
+          post_.Add(t.postprocessMs);
+          ++state_.detections;
+          if (overflow) ++state_.overflowFrames;
+          state_.lastClasses = std::move(classes);
+        }
+      } catch (...) {
+        std::lock_guard lock(queueMutex);
+        completionError = std::current_exception();
+        inflight = 0;
+        queueCv.notify_all();
+      }
+    });
 
     const int64_t start = QpcNow();
     {
@@ -201,21 +329,31 @@ void Session::Run(SessionConfig config) {
       state_.numClasses = detector.NumClasses();
     }
     float conf = conf_, iou = iou_;
-
     const int64_t freq = QpcFrequency();
     int64_t secStart = start;
     uint64_t secPresentsStart = 0;
-    uint32_t secOverflow = 0;
-    std::vector<double> secLatency, secPre, secInfer, secPost;
-    double secBoxes = 0;
-    OverlayFrame frameOut;
+    int nextSlot = 0;
 
     while (!stop_) {
       if (overlayFailed) throw std::runtime_error("覆盖层失败：" + overlayError);
+      {
+        std::lock_guard lock(queueMutex);
+        if (completionError) std::rethrow_exception(completionError);
+      }
       if (window && !IsWindow(window)) throw std::runtime_error("目标窗口已关闭");
 
+      // 在途帧达到上限时先等最早一帧完成，再取画面：等待期间到达的画面由采集接口合并为最新一帧，
+      // 提交的总是等待结束时的最新画面（设计方案 6.1）
+      bool slotFree;
+      {
+        std::unique_lock lock(queueMutex);
+        slotFree = queueCv.wait_for(lock, std::chrono::milliseconds(100),
+                                    [&] { return inflight < maxInflight || completionError; });
+        if (completionError) std::rethrow_exception(completionError);
+      }
+
       CapturedFrame frame;
-      const AcquireStatus status = source->AcquireLatest(100, frame);
+      const AcquireStatus status = slotFree ? source->AcquireLatest(100, frame) : AcquireStatus::kTimeout;
       if (status == AcquireStatus::kLost) {
         if (!source->Recreate()) throw std::runtime_error("采集中断且无法恢复");
         continue;
@@ -245,49 +383,33 @@ void Session::Run(SessionConfig config) {
             iou = iou_;
             detector.SetThresholds(conf, iou);
           }
-          const DetectionOutput& r = detector.Run(context.Get(), frame.texture, region,
-                                                  static_cast<float>(origin.x), static_cast<float>(origin.y));
-          const double ms = QpcToMs(QpcNow() - frame.acquireQpc);
-
-          frameOut.boxes.clear();
-          frameOut.classes.clear();
-          std::map<int, int> classes;
-          for (int i = 0; i < r.count; ++i) {
-            const Detection& d = r.detections[i];
-            frameOut.boxes.push_back({static_cast<LONG>(d.x1), static_cast<LONG>(d.y1), static_cast<LONG>(d.x2),
-                                      static_cast<LONG>(d.y2)});
-            frameOut.classes.push_back(d.cls);
-            ++classes[d.cls];
+          detector.Submit(context.Get(), frame.texture, region, static_cast<float>(origin.x),
+                          static_cast<float>(origin.y), nextSlot);
+          source->ReleaseFrame();
+          {
+            std::lock_guard lock(queueMutex);
+            queue.push_back({nextSlot, frame.acquireQpc});
+            ++inflight;
           }
-          frameOut.acquireQpc = frame.acquireQpc;
-          if (config.overlay) slot.Publish(frameOut);
-
-          const StageTimes& t = detector.LastTimes();
-          secLatency.push_back(ms);
-          secPre.push_back(t.preprocessMs);
-          secInfer.push_back(t.inferenceMs);
-          secPost.push_back(t.postprocessMs);
-          secBoxes += r.count;
-          if (r.overflow) ++secOverflow;
-
-          std::lock_guard lock(mutex_);
-          latency_.Add(ms);
-          pre_.Add(t.preprocessMs);
-          infer_.Add(t.inferenceMs);
-          post_.Add(t.postprocessMs);
-          ++state_.detections;
-          if (r.overflow) ++state_.overflowFrames;
-          state_.lastClasses = std::move(classes);
+          queueCv.notify_all();
+          nextSlot = (nextSlot + 1) % Detector::kSlots;
+        } else {
+          source->ReleaseFrame();
         }
       }
 
       const int64_t now = QpcNow();
       if (now - secStart >= freq) {
         const double secs = static_cast<double>(now - secStart) / freq;
+        DXGI_QUERY_VIDEO_MEMORY_INFO vram{};
+        const bool haveVram =
+            adapter3 && SUCCEEDED(adapter3->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &vram));
+        const uint64_t p = presents.load();
+
+        std::lock_guard lock(mutex_);
         SessionSecond s;
         s.t = QpcToMs(now - start) / 1000.0;
         s.detectionsPerSec = secLatency.size() / secs;
-        const uint64_t p = presents.load();
         s.overlayPerSec = (p - secPresentsStart) / secs;
         s.latency = ComputePercentiles(secLatency);
         s.preMs = Median(secPre);
@@ -295,11 +417,6 @@ void Session::Run(SessionConfig config) {
         s.postMs = Median(secPost);
         s.boxes = secLatency.empty() ? 0 : secBoxes / secLatency.size();
         s.overflowFrames = secOverflow;
-
-        DXGI_QUERY_VIDEO_MEMORY_INFO vram{};
-        const bool haveVram = adapter3 && SUCCEEDED(adapter3->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &vram));
-
-        std::lock_guard lock(mutex_);
         seconds_.push_back(s);
         if (seconds_.size() > kMaxSeconds) seconds_.pop_front();
         state_.elapsed = s.t;
@@ -307,7 +424,6 @@ void Session::Run(SessionConfig config) {
           state_.vramUsedBytes = vram.CurrentUsage;
           state_.vramBudgetBytes = vram.Budget;
         }
-
         secStart = now;
         secPresentsStart = p;
         secOverflow = 0;
@@ -319,18 +435,19 @@ void Session::Run(SessionConfig config) {
       }
     }
 
-    overlayStop = true;
-    if (overlayThread.joinable()) overlayThread.join();
+    source->ReleaseFrame();
+    shutdown();
     detector.SaveCaches();
+    SetGpuPriority(GpuPriority::kNormal);
     std::lock_guard lock(mutex_);
     state_.phase = SessionPhase::kIdle;
   } catch (const winrt::hresult_error& e) {
-    overlayStop = true;
-    if (overlayThread.joinable()) overlayThread.join();
+    shutdown();
+    SetGpuPriority(GpuPriority::kNormal);
     Fail("WinRT 错误：" + Utf8(std::wstring(e.message())));
   } catch (const std::exception& e) {
-    overlayStop = true;
-    if (overlayThread.joinable()) overlayThread.join();
+    shutdown();
+    SetGpuPriority(GpuPriority::kNormal);
     Fail(e.what());
   }
 }

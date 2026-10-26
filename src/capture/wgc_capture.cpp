@@ -38,7 +38,6 @@ class WgcCapture final : public CaptureSource {
  public:
   WgcCapture(ID3D11Device* device, wgc::GraphicsCaptureItem item, HWND window, POINT monitorOrigin)
       : device_(device), item_(std::move(item)), window_(window), monitorOrigin_(monitorOrigin) {
-    device_->GetImmediateContext(context_.put());
     winrtDevice_ = WrapDevice(device_);
     frameEvent_.attach(CreateEventW(nullptr, FALSE, FALSE, nullptr));
     closedToken_ = item_.Closed([this](auto&&, auto&&) {
@@ -56,6 +55,7 @@ class WgcCapture final : public CaptureSource {
   const char* Name() const override { return window_ ? "WGC 窗口" : "WGC 显示器"; }
 
   AcquireStatus AcquireLatest(uint32_t timeoutMs, CapturedFrame& out) override {
+    ReleaseFrame();
     if (closed_) return AcquireStatus::kLost;
     if (WaitForSingleObject(frameEvent_.get(), timeoutMs) != WAIT_OBJECT_0) return AcquireStatus::kTimeout;
     if (closed_) return AcquireStatus::kLost;
@@ -79,29 +79,29 @@ class WgcCapture final : public CaptureSource {
     }
 
     auto access = latest.Surface().as<::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
-    winrt::com_ptr<ID3D11Texture2D> surface;
-    winrt::check_hresult(access->GetInterface(__uuidof(ID3D11Texture2D), surface.put_void()));
-
+    surface_ = nullptr;
+    winrt::check_hresult(access->GetInterface(__uuidof(ID3D11Texture2D), surface_.put_void()));
     D3D11_TEXTURE2D_DESC sd{};
-    surface->GetDesc(&sd);
-    const uint32_t w = std::min<uint32_t>(size.Width, sd.Width);
-    const uint32_t h = std::min<uint32_t>(size.Height, sd.Height);
-    EnsureOwnedTexture(w, h, sd.Format);
+    surface_->GetDesc(&sd);
 
-    // 设计方案 4.2 允许的那一次 GPU 内复制
-    D3D11_BOX box{0, 0, 0, w, h, 1};
-    context_->CopySubresourceRegion(owned_.get(), 0, 0, 0, 0, surface.get(), 0, &box);
-    const int64_t sourceQpc = Hns100ToQpc(latest.SystemRelativeTime().count());
-    latest.Close();
-
-    out.texture = owned_.get();
-    out.width = w;
-    out.height = h;
+    // 直接交出帧池缓冲，使用方复制所需区域后调用 ReleaseFrame()（设计方案 4.2）
+    current_ = latest;
+    out.texture = surface_.get();
+    out.width = std::min<uint32_t>(size.Width, sd.Width);
+    out.height = std::min<uint32_t>(size.Height, sd.Height);
     out.screenOrigin = CurrentOrigin();
-    out.sourceQpc = sourceQpc;
+    out.sourceQpc = Hns100ToQpc(latest.SystemRelativeTime().count());
     out.acquireQpc = acquireQpc;
     out.accumulated = count;
     return AcquireStatus::kNewFrame;
+  }
+
+  void ReleaseFrame() override {
+    surface_ = nullptr;
+    if (current_) {
+      current_.Close();
+      current_ = nullptr;
+    }
   }
 
   bool Recreate() override {
@@ -138,28 +138,12 @@ class WgcCapture final : public CaptureSource {
   }
 
   void Stop() {
+    ReleaseFrame();
     if (session_) session_.Close();
     if (pool_) {
       pool_.FrameArrived(frameToken_);
       pool_.Close();
     }
-  }
-
-  void EnsureOwnedTexture(uint32_t w, uint32_t h, DXGI_FORMAT format) {
-    if (owned_ && ownedW_ == w && ownedH_ == h) return;
-    D3D11_TEXTURE2D_DESC td{};
-    td.Width = w;
-    td.Height = h;
-    td.MipLevels = 1;
-    td.ArraySize = 1;
-    td.Format = format;
-    td.SampleDesc.Count = 1;
-    td.Usage = D3D11_USAGE_DEFAULT;
-    td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-    owned_ = nullptr;
-    Check(device_->CreateTexture2D(&td, nullptr, owned_.put()), "CreateTexture2D(采集副本)");
-    ownedW_ = w;
-    ownedH_ = h;
   }
 
   POINT CurrentOrigin() const {
@@ -174,7 +158,6 @@ class WgcCapture final : public CaptureSource {
   }
 
   ID3D11Device* device_;
-  winrt::com_ptr<ID3D11DeviceContext> context_;
   wdx::Direct3D11::IDirect3DDevice winrtDevice_{nullptr};
   wgc::GraphicsCaptureItem item_;
   HWND window_;
@@ -186,8 +169,8 @@ class WgcCapture final : public CaptureSource {
   winrt::event_token closedToken_{};
   winrt::handle frameEvent_;
   std::atomic<bool> closed_{false};
-  winrt::com_ptr<ID3D11Texture2D> owned_;
-  uint32_t ownedW_ = 0, ownedH_ = 0;
+  wgc::Direct3D11CaptureFrame current_{nullptr};  // 已交出、尚未释放的帧
+  winrt::com_ptr<ID3D11Texture2D> surface_;
 };
 
 auto CaptureInterop() {

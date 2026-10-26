@@ -43,4 +43,37 @@ std::wstring FormatLuid(const LUID& luid) {
   return buf;
 }
 
+HagsState QueryHags(const LUID& luid) {
+  // 与 d3dkmthk.h 中的定义一致，运行时从 gdi32 取函数，无需 WDK 头文件
+  struct OpenFromLuid { LUID adapterLuid; UINT adapter; };
+  struct QueryInfo { UINT adapter; UINT type; void* data; UINT size; };
+  struct Close { UINT adapter; };
+  using OpenFn = LONG(APIENTRY*)(OpenFromLuid*);
+  using QueryFn = LONG(APIENTRY*)(const QueryInfo*);
+  using CloseFn = LONG(APIENTRY*)(const Close*);
+  constexpr UINT kWddm27Caps = 70;  // KMTQAITYPE_WDDM_2_7_CAPS
+
+  HagsState state;
+  HMODULE gdi = GetModuleHandleW(L"gdi32.dll");
+  if (!gdi) gdi = LoadLibraryW(L"gdi32.dll");
+  auto open = reinterpret_cast<OpenFn>(GetProcAddress(gdi, "D3DKMTOpenAdapterFromLuid"));
+  auto query = reinterpret_cast<QueryFn>(GetProcAddress(gdi, "D3DKMTQueryAdapterInfo"));
+  auto close = reinterpret_cast<CloseFn>(GetProcAddress(gdi, "D3DKMTCloseAdapter"));
+  if (!open || !query || !close) return state;
+
+  OpenFromLuid o{luid, 0};
+  if (open(&o) != 0) return state;
+  UINT caps = 0;
+  const QueryInfo q{o.adapter, kWddm27Caps, &caps, sizeof(caps)};
+  if (query(&q) == 0) {
+    state.queried = true;
+    state.supported = (caps & 1u) != 0;
+    state.enabled = (caps & 2u) != 0;
+    state.enabledByDefault = (caps & 4u) != 0;
+  }
+  const Close c{o.adapter};
+  close(&c);
+  return state;
+}
+
 }  // namespace nr

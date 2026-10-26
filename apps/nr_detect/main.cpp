@@ -10,6 +10,7 @@
 #include "inference/detector.h"
 #include "pipeline/session.h"
 
+#include <cuda_runtime.h>
 #include <unknwn.h>
 #include <winrt/base.h>
 
@@ -40,6 +41,12 @@ struct Options {
   std::wstring windowTitle;  // 空则使用合成测试源
   double duration = 30;
   bool overlay = true;
+  // 调度实验项
+  int inflight = 1;
+  nr::GpuPriority gpuPriority = nr::GpuPriority::kNormal;
+  bool mmcss = false;
+  std::wstring sync = L"auto";  // CUDA 等待方式：auto | spin | yield | block
+  std::filesystem::path summaryJson;
 };
 
 void PrintUsage() {
@@ -70,6 +77,14 @@ bool ParseOptions(int argc, wchar_t** argv, Options& o) {
     } else if (a == L"--window" && (v = next())) o.windowTitle = v;
     else if (a == L"--duration" && (v = next())) o.duration = std::wcstod(v, nullptr);
     else if (a == L"--no-overlay") o.overlay = false;
+    else if (a == L"--inflight" && (v = next())) o.inflight = _wtoi(v);
+    else if (a == L"--gpu-priority" && (v = next())) {
+      std::string name;
+      for (const wchar_t* c = v; *c; ++c) name += static_cast<char>(*c);
+      if (!nr::ParseGpuPriority(name, o.gpuPriority)) return false;
+    } else if (a == L"--mmcss") o.mmcss = true;
+    else if (a == L"--sync" && (v = next())) o.sync = v;
+    else if (a == L"--summary-json" && (v = next())) o.summaryJson = v;
     else return false;
   }
   return true;
@@ -121,8 +136,9 @@ int RunImages(const Options& o) {
     const nr::BgraImage image = nr::LoadBgraImage(line);
     auto texture = nr::CreateTexture(device.Get(), image);
     const D3D11_BOX region{0, 0, 0, image.width, image.height, 1};
-    const nr::DetectionOutput& r = detector.Run(context.Get(), texture.Get(), region, 0, 0);
-    const nr::StageTimes& t = detector.LastTimes();
+    nr::StageTimes t;
+    detector.Submit(context.Get(), texture.Get(), region, 0, 0, 0);
+    const nr::DetectionOutput& r = detector.Wait(0, &t);
 
     std::string s = "{\"image\":\"";
     for (char c : Utf8(line)) s += (c == '\\') ? std::string("/") : std::string(1, c);
@@ -173,6 +189,22 @@ int RunLive(const Options& o) {
   config.mode = o.mode == Mode::kWgcWindow ? nr::CaptureMode::kWgc : nr::CaptureMode::kDuplication;
   config.detector = MakeDetectorOptions(o);
   config.overlay = o.overlay;
+  config.inflight = o.inflight;
+  config.gpuPriority = o.gpuPriority;
+  config.mmcss = o.mmcss;
+
+  // CUDA 等待方式需在上下文创建前设置，作用于整个进程（设计方案 6.2）
+  if (o.sync != L"auto") {
+    const unsigned flags = o.sync == L"spin" ? cudaDeviceScheduleSpin
+                           : o.sync == L"yield" ? cudaDeviceScheduleYield
+                                                : cudaDeviceScheduleBlockingSync;
+    int count = 0;
+    cudaGetDeviceCount(&count);
+    for (int i = 0; i < count; ++i) {
+      cudaSetDevice(i);
+      cudaSetDeviceFlags(flags);
+    }
+  }
 
   nr::Session session;
   session.Start(config);
@@ -216,6 +248,41 @@ int RunLive(const Options& o) {
   PrintPercentiles("GPU 预处理", s.pre);
   PrintPercentiles("GPU 推理", s.infer);
   PrintPercentiles("GPU 后处理+回读", s.post);
+  std::printf("  GPU 调度优先级 请求 %s（状态 0x%08lX），生效 %s\n", nr::GpuPriorityName(o.gpuPriority),
+              static_cast<unsigned long>(s.gpuPriorityStatus),
+              s.gpuPriorityEffective >= 0 && s.gpuPriorityEffective <= 5
+                  ? nr::GpuPriorityName(static_cast<nr::GpuPriority>(s.gpuPriorityEffective))
+                  : "未知");
+
+  if (!o.summaryJson.empty()) {
+    FILE* f = nullptr;
+    if (_wfopen_s(&f, o.summaryJson.c_str(), L"w") == 0 && f) {
+      auto pct = [&](const char* name, const nr::Percentiles& p, bool comma) {
+        std::fprintf(f, "\"%s\":{\"n\":%zu,\"p50\":%.4f,\"p95\":%.4f,\"p99\":%.4f,\"max\":%.4f}%s", name, p.count, p.p50,
+                     p.p95, p.p99, p.max, comma ? "," : "");
+      };
+      // 稳态：去掉开头 3 秒的预热，按秒取检测速率
+      double rateSum = 0;
+      int rateN = 0;
+      for (const auto& sec : session.Snapshot(100000).seconds) {
+        if (sec.t > 3.0) {
+          rateSum += sec.detectionsPerSec;
+          ++rateN;
+        }
+      }
+      std::fprintf(f, "{\"elapsed\":%.3f,\"detections\":%llu,\"steady_rate\":%.3f,\"overflow_frames\":%llu,"
+                      "\"vram_used_mb\":%.1f,\"vram_budget_mb\":%.1f,\"gpu_priority_status\":%ld,\"gpu_priority_effective\":%d,",
+                   s.elapsed, static_cast<unsigned long long>(s.detections), rateN ? rateSum / rateN : 0.0,
+                   static_cast<unsigned long long>(s.overflowFrames), s.vramUsedBytes / 1048576.0,
+                   s.vramBudgetBytes / 1048576.0, s.gpuPriorityStatus, s.gpuPriorityEffective);
+      pct("latency", s.latency, true);
+      pct("pre", s.pre, true);
+      pct("infer", s.infer, true);
+      pct("post", s.post, false);
+      std::fprintf(f, "}\n");
+      std::fclose(f);
+    }
+  }
   return 0;
 }
 

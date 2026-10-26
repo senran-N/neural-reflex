@@ -2,6 +2,8 @@
 
 #include <windows.h>
 
+#include <string>
+
 namespace nr {
 
 [[noreturn]] void Fail(const char* what, HRESULT hr);
@@ -17,5 +19,14 @@ void EnableDpiAwareness();
 bool DisablePowerThrottling();
 
 void SetCurrentThreadName(const wchar_t* name);
+
+// 进程级 GPU 调度优先级（WDDM，D3DKMTSetProcessSchedulingPriorityClass），作用于本进程的所有 GPU 上下文，
+// 包括 CUDA（设计方案 6.4）。返回 NTSTATUS，0 为成功。返回成功不代表按请求生效，以 GetGpuPriority() 读回为准。
+enum class GpuPriority { kIdle = 0, kBelowNormal = 1, kNormal = 2, kAboveNormal = 3, kHigh = 4, kRealtime = 5 };
+long SetGpuPriority(GpuPriority priority);
+// 读回实际生效的级别（GpuPriority 数值），失败返回 -1。
+int GetGpuPriority();
+const char* GpuPriorityName(GpuPriority priority);
+bool ParseGpuPriority(const std::string& name, GpuPriority& out);
 
 }  // namespace nr

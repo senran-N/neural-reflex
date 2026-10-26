@@ -29,4 +29,39 @@ void SetCurrentThreadName(const wchar_t* name) {
   SetThreadDescription(GetCurrentThread(), name);
 }
 
+long SetGpuPriority(GpuPriority priority) {
+  using Fn = LONG(APIENTRY*)(HANDLE, INT);
+  static const Fn fn = reinterpret_cast<Fn>(
+      GetProcAddress(GetModuleHandleW(L"gdi32.dll") ? GetModuleHandleW(L"gdi32.dll") : LoadLibraryW(L"gdi32.dll"),
+                     "D3DKMTSetProcessSchedulingPriorityClass"));
+  if (!fn) return -1;
+  return fn(GetCurrentProcess(), static_cast<INT>(priority));
+}
+
+int GetGpuPriority() {
+  using Fn = LONG(APIENTRY*)(HANDLE, INT*);
+  static const Fn fn = reinterpret_cast<Fn>(
+      GetProcAddress(GetModuleHandleW(L"gdi32.dll") ? GetModuleHandleW(L"gdi32.dll") : LoadLibraryW(L"gdi32.dll"),
+                     "D3DKMTGetProcessSchedulingPriorityClass"));
+  INT value = -1;
+  if (!fn || fn(GetCurrentProcess(), &value) != 0) return -1;
+  return value;
+}
+
+namespace {
+constexpr const char* kGpuPriorityNames[] = {"idle", "below", "normal", "above", "high", "realtime"};
+}
+
+const char* GpuPriorityName(GpuPriority priority) { return kGpuPriorityNames[static_cast<int>(priority)]; }
+
+bool ParseGpuPriority(const std::string& name, GpuPriority& out) {
+  for (int i = 0; i < 6; ++i) {
+    if (name == kGpuPriorityNames[i]) {
+      out = static_cast<GpuPriority>(i);
+      return true;
+    }
+  }
+  return false;
+}
+
 }  // namespace nr

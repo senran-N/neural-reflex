@@ -257,6 +257,7 @@ int Run(const Options& o) {
         D3D11_BOX box{static_cast<UINT>(tagX), static_cast<UINT>(tagY), 0,
                       static_cast<UINT>(tagX + nr::tag::kWidthPx), static_cast<UINT>(tagY + nr::tag::kHeightPx), 1};
         context->CopySubresourceRegion(staging.Get(), 0, 0, 0, 0, frame.texture, 0, &box);
+        source->ReleaseFrame();
         D3D11_MAPPED_SUBRESOURCE mapped;
         nr::Check(context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped), "Map(暂存)");
         const auto payload = nr::tag::Decode(static_cast<const uint8_t*>(mapped.pData), mapped.RowPitch);
