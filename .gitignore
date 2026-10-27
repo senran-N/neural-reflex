@@ -29,8 +29,8 @@ cache/
 *.etl
 reports/raw/
 
-# 设计检查截图（direction.json 保留，记录所选风格）
-.taste-skill/inspect/
+# 本地设计工具数据
+.taste-skill/
 dist/
 
 # Python 缓存
