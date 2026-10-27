@@ -38,6 +38,12 @@ struct AppSettings {
   std::string mode = "wgc";  // wgc | dd
   bool overlay = true;
   bool cudaGraph = true;
+  bool fp16 = true;             // 硬件支持时启用 FP16 半精度加速
+  std::string roiMode = "full"; // 局部检测区域模式：full | center | custom
+  int roiWidth = 0;             // 0 为自动使用模型输入边长
+  int roiHeight = 0;            // 0 为自动使用模型输入边长
+  int roiX = 0;                 // custom 模式起点 X
+  int roiY = 0;                 // custom 模式起点 Y
   bool gpuRealtime = false;  // 进程 GPU 调度优先级设为实时级（设计方案 6.4）
   bool publishResults = false;  // 结果写入共享内存（扩展机制方案第 5 节）
   std::wstring lastTargetExe;

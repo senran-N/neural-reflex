@@ -182,6 +182,12 @@ void Controller::OnMessage(const std::string& text, HWND owner) {
       const bool restart = session_.Active() && (s.value("mode", settings_.mode) != settings_.mode ||
                                                  s.value("overlay", settings_.overlay) != settings_.overlay ||
                                                  s.value("cudaGraph", settings_.cudaGraph) != settings_.cudaGraph ||
+                                                 s.value("fp16", settings_.fp16) != settings_.fp16 ||
+                                                 s.value("roiMode", settings_.roiMode) != settings_.roiMode ||
+                                                 s.value("roiWidth", settings_.roiWidth) != settings_.roiWidth ||
+                                                 s.value("roiHeight", settings_.roiHeight) != settings_.roiHeight ||
+                                                 s.value("roiX", settings_.roiX) != settings_.roiX ||
+                                                 s.value("roiY", settings_.roiY) != settings_.roiY ||
                                                  s.value("gpuRealtime", settings_.gpuRealtime) != settings_.gpuRealtime ||
                                                  s.value("publishResults", settings_.publishResults) != settings_.publishResults);
       settings_.conf = std::clamp(s.value("conf", settings_.conf), 0.01f, 0.99f);
@@ -189,6 +195,12 @@ void Controller::OnMessage(const std::string& text, HWND owner) {
       settings_.mode = s.value("mode", settings_.mode) == "dd" ? "dd" : "wgc";
       settings_.overlay = s.value("overlay", settings_.overlay);
       settings_.cudaGraph = s.value("cudaGraph", settings_.cudaGraph);
+      settings_.fp16 = s.value("fp16", settings_.fp16);
+      settings_.roiMode = s.value("roiMode", settings_.roiMode);
+      settings_.roiWidth = s.value("roiWidth", settings_.roiWidth);
+      settings_.roiHeight = s.value("roiHeight", settings_.roiHeight);
+      settings_.roiX = s.value("roiX", settings_.roiX);
+      settings_.roiY = s.value("roiY", settings_.roiY);
       settings_.gpuRealtime = s.value("gpuRealtime", settings_.gpuRealtime);
       settings_.publishResults = s.value("publishResults", settings_.publishResults);
       session_.SetThresholds(settings_.conf, settings_.iou);
@@ -210,7 +222,9 @@ void Controller::OnTimer() {
   if (s.phase != lastPhase_) {
     lastPhase_ = s.phase;
     // 引擎在准备阶段编译并写入缓存，进入运行后刷新状态
-    model_.engineCached = std::filesystem::exists(dataDir_ / "engines" / (model_.path.stem().string() + ".engine"));
+    const auto stem = model_.path.stem().string();
+    model_.engineCached = std::filesystem::exists(dataDir_ / "engines" / (stem + (settings_.fp16 ? ".fp16.engine" : ".engine"))) ||
+                          std::filesystem::exists(dataDir_ / "engines" / (stem + ".engine"));
     SendState();
     if (s.phase == SessionPhase::kFailed) Toast("error", s.error);
     if (s.phase == SessionPhase::kRunning && !s.publishError.empty()) Toast("warning", "结果共享未开启：" + s.publishError);
@@ -278,6 +292,12 @@ void Controller::ExportDiagnostics() {
                  {"mode", settings_.mode},
                  {"overlay", settings_.overlay},
                  {"cudaGraph", settings_.cudaGraph},
+                 {"fp16", settings_.fp16},
+                 {"roiMode", settings_.roiMode},
+                 {"roiWidth", settings_.roiWidth},
+                 {"roiHeight", settings_.roiHeight},
+                 {"roiX", settings_.roiX},
+                 {"roiY", settings_.roiY},
                  {"gpuRealtime", settings_.gpuRealtime},
                  {"publishResults", settings_.publishResults}}}};
   const std::filesystem::path dir = dataDir_ / "diagnostics";
@@ -327,6 +347,17 @@ void Controller::Start() {
   config.overlay = settings_.overlay;
   config.gpuPriority = settings_.gpuRealtime ? GpuPriority::kRealtime : GpuPriority::kNormal;
   config.publishResults = settings_.publishResults || plugins_->AnyEnabled();
+  if (settings_.roiMode == "center") {
+    config.roi.mode = RoiMode::kCenter;
+  } else if (settings_.roiMode == "custom") {
+    config.roi.mode = RoiMode::kCustom;
+  } else {
+    config.roi.mode = RoiMode::kFull;
+  }
+  config.roi.width = settings_.roiWidth;
+  config.roi.height = settings_.roiHeight;
+  config.roi.x = settings_.roiX;
+  config.roi.y = settings_.roiY;
   lastSentSecond_ = -1;
   session_.Start(config);
   lastPhase_ = SessionPhase::kPreparing;
@@ -340,7 +371,9 @@ void Controller::Stop() {
   SendStats();
   session_.Stop();
   lastPhase_ = session_.Snapshot(0).phase;
-  model_.engineCached = std::filesystem::exists(dataDir_ / "engines" / (model_.path.stem().string() + ".engine"));
+  const auto stem = model_.path.stem().string();
+  model_.engineCached = std::filesystem::exists(dataDir_ / "engines" / (stem + (settings_.fp16 ? ".fp16.engine" : ".engine"))) ||
+                        std::filesystem::exists(dataDir_ / "engines" / (stem + ".engine"));
   SendState();
   SendSessionToPlugins();
 }
@@ -387,7 +420,9 @@ ModelInfo Controller::ReadModel(const std::filesystem::path& path) const {
                 : lower.find("fp8") != std::string::npos  ? "FP8"
                 : lower.find("fp32") != std::string::npos ? "FP32"
                                                           : "";
-  m.engineCached = std::filesystem::exists(dataDir_ / "engines" / (path.stem().string() + ".engine"));
+  const auto stem = path.stem().string();
+  m.engineCached = std::filesystem::exists(dataDir_ / "engines" / (stem + (settings_.fp16 ? ".fp16.engine" : ".engine"))) ||
+                   std::filesystem::exists(dataDir_ / "engines" / (stem + ".engine"));
 
   // 模型清单（扩展机制方案 4.1）；与检测会话使用同一套查找与解码器推断规则
   try {
@@ -460,6 +495,12 @@ void Controller::SendState() {
         {"mode", settings_.mode},
         {"overlay", settings_.overlay},
         {"cudaGraph", settings_.cudaGraph},
+        {"fp16", settings_.fp16},
+        {"roiMode", settings_.roiMode},
+        {"roiWidth", settings_.roiWidth},
+        {"roiHeight", settings_.roiHeight},
+        {"roiX", settings_.roiX},
+        {"roiY", settings_.roiY},
         {"gpuRealtime", settings_.gpuRealtime},
         {"publishResults", settings_.publishResults}}},
       {"gpu", gpuName_},
@@ -574,6 +615,12 @@ void Controller::LoadSettings() {
     settings_.mode = j.value("mode", settings_.mode);
     settings_.overlay = j.value("overlay", settings_.overlay);
     settings_.cudaGraph = j.value("cudaGraph", settings_.cudaGraph);
+    settings_.fp16 = j.value("fp16", settings_.fp16);
+    settings_.roiMode = j.value("roiMode", settings_.roiMode);
+    settings_.roiWidth = j.value("roiWidth", settings_.roiWidth);
+    settings_.roiHeight = j.value("roiHeight", settings_.roiHeight);
+    settings_.roiX = j.value("roiX", settings_.roiX);
+    settings_.roiY = j.value("roiY", settings_.roiY);
     settings_.gpuRealtime = j.value("gpuRealtime", settings_.gpuRealtime);
     settings_.publishResults = j.value("publishResults", settings_.publishResults);
     settings_.plugins = j.value("plugins", json::object());
@@ -589,6 +636,12 @@ void Controller::SaveSettings() const {
                   {"mode", settings_.mode},
                   {"overlay", settings_.overlay},
                   {"cudaGraph", settings_.cudaGraph},
+                  {"fp16", settings_.fp16},
+                  {"roiMode", settings_.roiMode},
+                  {"roiWidth", settings_.roiWidth},
+                  {"roiHeight", settings_.roiHeight},
+                  {"roiX", settings_.roiX},
+                  {"roiY", settings_.roiY},
                   {"gpuRealtime", settings_.gpuRealtime},
                   {"publishResults", settings_.publishResults},
                   {"plugins", plugins_ ? plugins_->Saved() : settings_.plugins},

@@ -32,6 +32,15 @@ import threading
 import time
 from ctypes import wintypes
 
+if sys.platform == "win32":
+    try:
+        _winmm = ctypes.WinDLL("winmm")
+        _winmm.timeBeginPeriod(1)
+        import atexit
+        atexit.register(lambda: _winmm.timeEndPeriod(1))
+    except Exception:
+        pass
+
 PROTOCOL = 1   # 插件协议主版本（plugin.json 的 api 字段）
 API = "1.1"    # 本 SDK 实现的协议版本
 
@@ -99,6 +108,18 @@ _settings = _load_settings()
 def settings():
     """当前设置（宿主已按 plugin.json 的声明校验并补全缺省值）。live 设置项热更新后返回新值。"""
     return dict(_settings)
+
+
+def precise_sleep(seconds):
+    """高精度延时：在 Windows 上消除 15.6ms 时钟抖动，为高频/平滑控制提供稳定的节拍。"""
+    if seconds <= 0:
+        return
+    deadline = time.perf_counter() + seconds
+    rem = deadline - time.perf_counter()
+    if rem > 0.002:
+        time.sleep(rem - 0.0015)
+    while time.perf_counter() < deadline:
+        pass
 
 
 # ---------- 向宿主报告：标准输出每行一个 JSON ----------

@@ -265,8 +265,48 @@ input[type="range"] { width: 100%; accent-color: var(--accent); height: 20px; }
 .kpis.wrap { flex-wrap: wrap; row-gap: 14px; margin-bottom: 0; }
 /* 可换行的指标：不用左分隔线，换行后每行左端对齐 */
 .kpis.wrap .kpi { padding: 0 32px 0 0; border-left: 0; }
-.plugin-settings .field + .switch-row, .plugin-settings .switch-row + .field { margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--rule); }
-.plugin-settings .field + .field { padding-top: 20px; border-top: 1px solid var(--rule); }
+
+/* ---------- 插件设置系统：模块化分组、响应式网格与条件可见性 ---------- */
+.plugin-settings { display: flex; flex-direction: column; gap: 14px; margin-top: 14px; }
+.plugin-settings-group { background: rgba(255, 255, 255, 0.02); border: 1px solid var(--rule); border-radius: 6px; padding: 12px 14px; transition: border-color 150ms ease; }
+.plugin-settings-group:focus-within { border-color: #44444a; }
+.plugin-settings-group > summary { cursor: pointer; list-style: none; display: flex; align-items: center; justify-content: space-between; user-select: none; }
+.plugin-settings-group > summary::-webkit-details-marker { display: none; }
+.plugin-settings-group > summary:focus-visible { outline: 1px solid var(--accent); outline-offset: 4px; border-radius: 4px; }
+.group-header { display: flex; align-items: baseline; gap: 8px; flex: 1; flex-wrap: wrap; }
+.group-title { font-size: 13px; font-weight: 600; color: var(--text); }
+.group-desc { font-size: 11px; color: var(--muted); }
+.group-meta { display: flex; align-items: center; gap: 8px; }
+.group-badge { font-size: 11px; color: var(--muted); background: var(--ground); padding: 1px 6px; border-radius: 10px; border: 1px solid var(--rule); }
+.group-arrow { width: 14px; height: 14px; fill: var(--muted); transition: transform 200ms var(--ease-out); flex: none; }
+details.plugin-settings-group[open] > summary .group-arrow { transform: rotate(180deg); }
+
+.settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 16px; margin-top: 12px; }
+.settings-grid:empty { margin-top: 0; }
+.settings-grid .col-1 { grid-column: span 1; }
+.settings-grid .col-2 { grid-column: 1 / -1; }
+@media (max-width: 680px) {
+  .settings-grid { grid-template-columns: 1fr; }
+  .settings-grid .col-1 { grid-column: 1 / -1; }
+}
+
+.setting-card { display: flex; flex-direction: column; gap: 6px; justify-content: flex-start; }
+.setting-card.setting-hidden { display: none !important; }
+.setting-card .field-top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.setting-card label { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0; font-size: 12px; font-weight: 500; color: var(--text); }
+.setting-card .title-wrap { display: flex; align-items: center; gap: 6px; }
+.setting-card .setting-val-badge { font-family: 'Cascadia Mono', Consolas, monospace; font-size: 12px; color: var(--accent); font-weight: 600; }
+.setting-card .unit { font-size: 11px; color: var(--muted); font-weight: 400; margin-left: 2px; }
+.setting-card .desc, .setting-card .hint { font-size: 11px; line-height: 15px; color: var(--muted); margin-top: 2px; }
+.setting-card input[type='range'] { margin: 4px 0 2px; }
+.setting-card .segmented { width: 100%; display: flex; }
+.setting-card .segmented button { flex: 1; text-align: center; }
+
+/* 紧凑开关行 */
+.setting-card.switch-card { flex-direction: row; align-items: center; justify-content: space-between; min-height: 36px; padding: 4px 0; }
+.setting-card.switch-card .switch-info { display: flex; flex-direction: column; gap: 2px; }
+.setting-card.switch-card .title { font-size: 12px; font-weight: 500; color: var(--text); }
+.setting-card.switch-card .switch { flex: none; margin-left: 12px; }
 .text-input { width: 100%; height: var(--control-height); padding: 0 14px; background: var(--ground); border: 1px solid var(--control); border-radius: var(--radius-control); color: var(--text); }
 .text-input:focus { border-color: #55555a; outline: none; }
 .log { margin: 0; max-height: 240px; overflow: auto; padding: 10px 12px; background: var(--ground); border-radius: 4px; font: 12px/18px "Cascadia Mono", Consolas, "Microsoft YaHei UI", monospace; color: #c9c9cc; white-space: pre-wrap; overflow-wrap: anywhere; }

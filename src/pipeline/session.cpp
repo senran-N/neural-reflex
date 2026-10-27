@@ -66,24 +66,28 @@ void OverlayLoop(IDXGIAdapter1* adapter, RECT screenRect, const LatestSlot<Overl
   SetCurrentThreadName(L"nr-overlay");
   try {
     Overlay overlay(adapter, screenRect, kOverlayMaxRects);
-    HANDLE waitable = overlay.FrameWaitable();
     uint64_t seen = 0;
+    bool haveFrame = false, showing = false;
     OverlayFrame current;
     std::vector<ColorRect> rects;
     // 与界面强调色一致的首色，其余按类别循环
     static constexpr float kPalette[][3] = {{0.24f, 0.86f, 0.52f}, {1.0f, 0.36f, 0.48f}, {0.29f, 0.60f, 1.0f},
                                             {1.0f, 0.80f, 0.20f}, {1.0f, 0.55f, 0.20f}, {0.40f, 0.90f, 0.95f}};
     while (!stop) {
-      const DWORD r = MsgWaitForMultipleObjectsEx(1, &waitable, 100, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
-      if (r == WAIT_OBJECT_0 + 1) {
+      // 等待消息并低频检查最新结果；不等待交换链，避免无新结果时形成满刷新率空转。
+      const DWORD r = MsgWaitForMultipleObjectsEx(0, nullptr, 4, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+      if (r == WAIT_OBJECT_0) {
         MSG msg;
         while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) DispatchMessageW(&msg);
-        continue;
       }
-      if (r != WAIT_OBJECT_0) continue;
-      slot.TakeNewer(seen, current);
+
+      const bool updated = slot.TakeNewer(seen, current);
+      haveFrame = haveFrame || updated;
+      const bool fresh = haveFrame && QpcToMs(QpcNow() - current.acquireQpc) <= staleMs;
+      if (!updated && fresh == showing) continue;  // 画面没有变化，不提交任何 GPU 绘制或 Present
+
       rects.clear();
-      if (QpcToMs(QpcNow() - current.acquireQpc) <= staleMs) {
+      if (fresh) {
         for (size_t i = 0; i < current.boxes.size(); ++i) {
           const RECT& b = current.boxes[i];
           const float* c = kPalette[static_cast<size_t>(current.classes[i]) % std::size(kPalette)];
@@ -98,6 +102,7 @@ void OverlayLoop(IDXGIAdapter1* adapter, RECT screenRect, const LatestSlot<Overl
         }
       }
       overlay.Present(rects);
+      showing = fresh;
       presents++;
     }
   } catch (const std::exception& e) {
@@ -183,6 +188,9 @@ std::string SessionMetadata(const Detector& detector, const SessionConfig& confi
   const ModelManifest& m = detector.Manifest();
   nlohmann::json classes = nlohmann::json::object();
   for (const auto& [k, v] : m.classNames) classes[std::to_string(k)] = v;
+  const std::string roiModeStr = config.roi.mode == RoiMode::kCenter   ? "center"
+                                 : config.roi.mode == RoiMode::kCustom ? "custom"
+                                                                       : "full";
   nlohmann::json j = {{"layout", kResultsLayoutVersion},
                       {"session", sessionId},
                       {"state", state},
@@ -193,6 +201,12 @@ std::string SessionMetadata(const Detector& detector, const SessionConfig& confi
                       {"numClasses", detector.NumClasses()},
                       {"coordinates", "screen-physical"},  // 扩展机制方案 7.5
                       {"clock", "qpc"},
+                      {"roi",
+                       {{"mode", roiModeStr},
+                        {"width", config.roi.width},
+                        {"height", config.roi.height},
+                        {"x", config.roi.x},
+                        {"y", config.roi.y}}},
                       {"classNames", classes},
                       {"keypoints",
                        {{"count", detector.NumKeypoints()}, {"names", m.keypointNames}, {"skeleton", m.skeleton}}}};
@@ -463,6 +477,30 @@ void Session::Run(SessionConfig config) {
         }
 
         if (inFrame) {
+          // 局部感兴趣区域（RoI）裁剪计算
+          if (config.roi.mode != RoiMode::kFull) {
+            const LONG baseW = static_cast<LONG>(region.right - region.left);
+            const LONG baseH = static_cast<LONG>(region.bottom - region.top);
+            const LONG baseX = static_cast<LONG>(region.left);
+            const LONG baseY = static_cast<LONG>(region.top);
+            const int targetW = config.roi.width > 0 ? config.roi.width : detector.InputSize();
+            const int targetH = config.roi.height > 0 ? config.roi.height : detector.InputSize();
+            const LONG roiW = std::clamp(static_cast<LONG>(targetW), 1L, baseW);
+            const LONG roiH = std::clamp(static_cast<LONG>(targetH), 1L, baseH);
+            LONG roiOffsetX = 0, roiOffsetY = 0;
+            if (config.roi.mode == RoiMode::kCenter) {
+              roiOffsetX = (baseW - roiW) / 2;
+              roiOffsetY = (baseH - roiH) / 2;
+            } else if (config.roi.mode == RoiMode::kCustom) {
+              roiOffsetX = std::clamp(static_cast<LONG>(config.roi.x), 0L, std::max(0L, baseW - roiW));
+              roiOffsetY = std::clamp(static_cast<LONG>(config.roi.y), 0L, std::max(0L, baseH - roiH));
+            }
+            region = {static_cast<UINT>(baseX + roiOffsetX), static_cast<UINT>(baseY + roiOffsetY), 0,
+                      static_cast<UINT>(baseX + roiOffsetX + roiW), static_cast<UINT>(baseY + roiOffsetY + roiH), 1};
+            origin.x += roiOffsetX;
+            origin.y += roiOffsetY;
+          }
+
           if (conf != conf_ || iou != iou_) {
             conf = conf_;
             iou = iou_;

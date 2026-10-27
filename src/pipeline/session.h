@@ -22,10 +22,25 @@ namespace nr {
 
 enum class CaptureMode { kWgc, kDuplication };
 
+enum class RoiMode {
+  kFull,    // 全幅检测（默认）
+  kCenter,  // 中心局部感兴趣区域（1:1 无损，尺寸默认对齐模型输入）
+  kCustom   // 自定义局部感兴趣区域 [x, y, w, h]
+};
+
+struct RoiConfig {
+  RoiMode mode = RoiMode::kFull;
+  int width = 0;   // 0 表示自动使用模型输入边长（如 640）
+  int height = 0;  // 0 表示自动使用模型输入边长
+  int x = 0;       // kCustom 模式下的起点 X
+  int y = 0;       // kCustom 模式下的起点 Y
+};
+
 struct SessionConfig {
   HWND window = nullptr;       // 设置时以该窗口客户区为检测区域
   HMONITOR monitor = nullptr;  // window 为空时检测整个显示器
   CaptureMode mode = CaptureMode::kWgc;
+  RoiConfig roi;               // 感兴趣区域（RoI）配置
   DetectorOptions detector;
   bool overlay = true;
   double staleMs = 100;  // 超过该时间没有新结果，覆盖层清除旧框

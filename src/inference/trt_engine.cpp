@@ -44,6 +44,7 @@ std::vector<char> BuildEngine(const std::filesystem::path& onnx) {
     throw std::runtime_error("ONNX 解析失败：" + onnx.string());
   }
   std::unique_ptr<nvinfer1::IBuilderConfig> config(builder->createBuilderConfig());
+  config->setFlag(nvinfer1::BuilderFlag::kTF32);
   std::unique_ptr<nvinfer1::IHostMemory> plan(builder->buildSerializedNetwork(*network, *config));
   if (!plan) throw std::runtime_error("引擎构建失败");
   const auto* p = static_cast<const char*>(plan->data());

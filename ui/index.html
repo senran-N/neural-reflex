@@ -237,6 +237,20 @@
       </div>
 
       <div class="setting-row">
+        <div><h2>检测区域（RoI）</h2><p class="desc">选择全画幅检测或中心局部感兴趣区域（1:1 原生点对点输入，避免远端细节压缩失真）。</p></div>
+        <div class="panel">
+          <div class="field">
+            <span class="label">区域模式</span>
+            <div class="segmented" role="group" aria-label="检测区域模式">
+              <button type="button" data-roimode="full" aria-pressed="true">全画幅</button>
+              <button type="button" data-roimode="center" aria-pressed="false">中心 RoI (1:1 原生)</button>
+            </div>
+            <p class="hint">中心 RoI 自动以模型输入尺寸在画面中心原生截取，零压缩失真；切换后重新启动会话。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="setting-row">
         <div><h2>采集方式</h2><p class="desc">窗口目标推荐 WGC：只采集该窗口，覆盖层不会进入画面。桌面复制采集整个显示器，覆盖层的框也会被采集。</p></div>
         <div class="panel">
           <div class="field">
@@ -260,6 +274,10 @@
           <div class="switch-row">
             <div><div class="title">CUDA Graph</div><div class="desc">把推理整体录制为一张图重放，减少每帧的提交开销。</div></div>
             <button class="switch" type="button" role="switch" id="st-graph" aria-checked="true" aria-label="CUDA Graph"></button>
+          </div>
+          <div class="switch-row">
+            <div><div class="title">FP16 半精度加速</div><div class="desc">在支持张量核心（Tensor Cores）的 RTX 显卡上启用半精度推理，大幅降低延迟与显存占用。</div></div>
+            <button class="switch" type="button" role="switch" id="st-fp16" aria-checked="true" aria-label="FP16 半精度加速"></button>
           </div>
           <div class="switch-row">
             <div><div class="title">GPU 实时调度优先级</div><div class="desc">与长时间占用 GPU 的程序同时运行时，检测不再被其挤占；对方分到的 GPU 时间会相应减少（实测帧率约降 12%）。</div></div>

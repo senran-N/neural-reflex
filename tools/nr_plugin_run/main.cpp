@@ -89,6 +89,8 @@ int wmain(int argc, wchar_t** argv) {
           {"version", m.version},
           {"invalid", m.invalid},
           {"incompatible", m.incompatible},
+          {"settingsSchema", m.settings},
+          {"settingGroups", m.settingGroups},
           {"activeFeatures", m.ActiveFeatures()}});
     return m.invalid.empty() && m.incompatible.empty() ? 0 : 1;
   }

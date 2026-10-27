@@ -36,6 +36,7 @@ struct PluginManifest {
   std::string command;
   std::vector<std::string> args;
   nlohmann::json settings = nlohmann::json::array();
+  nlohmann::json settingGroups = nlohmann::json::array();
   std::vector<std::string> features, optionalFeatures;
   uint64_t startTimeoutMs = 15000, stopTimeoutMs = 2000;
   std::string restart = "always";  // always | on-failure | never

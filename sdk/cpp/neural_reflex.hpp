@@ -15,6 +15,7 @@
 #include <nlohmann/json.hpp>
 
 #include <windows.h>
+#include <timeapi.h>
 
 #include <fcntl.h>
 #include <io.h>
@@ -92,8 +93,22 @@ class Plugin {
       settings_ = json::object();
     }
     if (!settings_.is_object()) settings_ = json::object();
+    // 提升 Windows 计时器精度，消除 15.6ms 粗粒度等待对高频控制的抖动
+    HMODULE mm = GetModuleHandleW(L"winmm.dll");
+    if (!mm) mm = LoadLibraryW(L"winmm.dll");
+    if (mm) {
+      using Fn = MMRESULT(WINAPI*)(UINT);
+      if (auto fn = reinterpret_cast<Fn>(GetProcAddress(mm, "timeBeginPeriod"))) fn(1);
+    }
     // 宿主托管时立即开始处理控制通道，以免错过启动时的事件与设置
     if (!id_.empty()) std::thread(&Plugin::ControlLoop, this).detach();
+  }
+  ~Plugin() {
+    HMODULE mm = GetModuleHandleW(L"winmm.dll");
+    if (mm) {
+      using Fn = MMRESULT(WINAPI*)(UINT);
+      if (auto fn = reinterpret_cast<Fn>(GetProcAddress(mm, "timeEndPeriod"))) fn(1);
+    }
   }
   Plugin(const Plugin&) = delete;
   Plugin& operator=(const Plugin&) = delete;

@@ -35,6 +35,10 @@ struct Options {
   float conf = 0.25f;
   float iou = 0.7f;
   bool cudaGraph = true;
+  bool fp16 = true;
+  std::wstring roiMode = L"full";  // full | center | custom
+  int roiW = 0, roiH = 0;
+  int roiX = 0, roiY = 0;
   // 离线模式
   std::filesystem::path imageList;
   std::filesystem::path jsonOut;
@@ -71,6 +75,12 @@ bool ParseOptions(int argc, wchar_t** argv, Options& o) {
     else if (a == L"--conf" && (v = next())) o.conf = std::wcstof(v, nullptr);
     else if (a == L"--iou" && (v = next())) o.iou = std::wcstof(v, nullptr);
     else if (a == L"--no-cuda-graph") o.cudaGraph = false;
+    else if (a == L"--fp16") o.fp16 = true;
+    else if (a == L"--no-fp16") o.fp16 = false;
+    else if (a == L"--roi" && (v = next())) o.roiMode = v;
+    else if (a == L"--roi-size" && (v = next())) {
+      swscanf_s(v, L"%dx%d", &o.roiW, &o.roiH);
+    }
     else if (a == L"--image-list" && (v = next())) o.imageList = v;
     else if (a == L"--json" && (v = next())) o.jsonOut = v;
     else if (a == L"--dump-dir" && (v = next())) o.dumpDir = v;
@@ -229,6 +239,13 @@ int RunLive(const Options& o) {
   config.gpuPriority = o.gpuPriority;
   config.mmcss = o.mmcss;
   config.publishResults = o.publish;
+  if (o.roiMode == L"center") config.roi.mode = nr::RoiMode::kCenter;
+  else if (o.roiMode == L"custom") config.roi.mode = nr::RoiMode::kCustom;
+  else config.roi.mode = nr::RoiMode::kFull;
+  config.roi.width = o.roiW;
+  config.roi.height = o.roiH;
+  config.roi.x = o.roiX;
+  config.roi.y = o.roiY;
 
   // CUDA 等待方式需在上下文创建前设置，作用于整个进程（设计方案 6.2）
   if (o.sync != L"auto") {

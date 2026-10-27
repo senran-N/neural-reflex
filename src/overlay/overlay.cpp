@@ -103,7 +103,8 @@ void Overlay::Present(const std::vector<ColorRect>& screenRects) {
   context_->ClearRenderTargetView(rtv_.Get(), clear);
   renderer_.Draw(context_.Get(), static_cast<float>(screenRect_.right - screenRect_.left),
                  static_cast<float>(screenRect_.bottom - screenRect_.top), local_.data(), local_.size());
-  Check(swapChain_->Present(1, 0), "Present(覆盖层)");
+  // 检测框不需要按显示器垂直同步排队；DirectComposition 会在下一次合成时采用最新内容。
+  Check(swapChain_->Present(0, 0), "Present(覆盖层)");
 }
 
 }  // namespace nr

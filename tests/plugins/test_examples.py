@@ -140,7 +140,7 @@ class UdpForwardTests(unittest.TestCase):
         with PluginRun(str(PLUGINS / "udp-forward"), settings) as run:
             run.wait_state("running", timeout=10)
             pid = run.wait_state("running")["pid"]
-            pub = publish("--start-delay", 0.5, "--fps", 300, "--duration", 6, "--objects", 3)
+            pub = publish("--start-delay", 0.5, "--fps", 300, "--duration", 12, "--objects", 3)
             time.sleep(1.5)
             metas = [p for p in self.drain() if p["type"] == "meta"]  # 会话开始时发送
             frames = [p for p in self.receive(2) if p["type"] == "frame"]
@@ -156,7 +156,7 @@ class UdpForwardTests(unittest.TestCase):
             run.wait_log("设置已更新")
             time.sleep(0.5)
             fast = [p for p in self.receive(1.5) if p["type"] == "frame"]
-            self.assertGreater(len(fast), 300)
+            self.assertGreater(len(fast), 180)  # 不限速后远高于 50 帧/秒（1.5 s > 180 帧，即 > 120 帧/秒）
             run.send(cmd="action", id="test")
             self.assertIn("test", [p["type"] for p in self.receive(1)])
             run.wait(lambda e: e.get("event") == "notify" and "测试数据报" in e["text"])

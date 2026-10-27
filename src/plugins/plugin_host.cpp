@@ -184,6 +184,41 @@ void CheckSettingsSchema(const json& schema) {
       throw std::runtime_error("设置项 " + key + " 缺少 options");
     }
     if (s.contains("live") && !s["live"].is_boolean()) throw std::runtime_error("设置项 " + key + " 的 live 须为布尔值");
+    if (s.contains("group") && !s["group"].is_string()) throw std::runtime_error("设置项 " + key + " 的 group 须为字符串");
+    if (s.contains("unit") && !s["unit"].is_string()) throw std::runtime_error("设置项 " + key + " 的 unit 须为字符串");
+    if (s.contains("col") && (!s["col"].is_number_integer() || s["col"].get<int>() < 1 || s["col"].get<int>() > 2)) {
+      throw std::runtime_error("设置项 " + key + " 的 col 须为 1 或 2");
+    }
+    if (s.contains("dependsOn")) {
+      const json& dep = s["dependsOn"];
+      if (!dep.is_object() || !dep.contains("key") || !dep["key"].is_string() || dep["key"].get<std::string>().empty()) {
+        throw std::runtime_error("设置项 " + key + " 的 dependsOn 须为包含非空 key 字符串的对象");
+      }
+    }
+  }
+  for (const json& s : schema) {
+    if (s.contains("dependsOn")) {
+      const std::string depKey = s["dependsOn"].value("key", "");
+      if (std::find(keys.begin(), keys.end(), depKey) == keys.end()) {
+        throw std::runtime_error("设置项 " + s.value("key", "") + " 的 dependsOn 引用了未定义的 key：" + depKey);
+      }
+    }
+  }
+}
+
+void CheckSettingGroups(const json& groups) {
+  if (!groups.is_array()) throw std::runtime_error("settingGroups 须为数组");
+  std::vector<std::string> ids;
+  for (const json& g : groups) {
+    if (!g.is_object() || !g.contains("id") || !g["id"].is_string() || g["id"].get<std::string>().empty()) {
+      throw std::runtime_error("设置分组须有非空字符串 id");
+    }
+    const std::string id = g["id"];
+    if (std::find(ids.begin(), ids.end(), id) != ids.end()) throw std::runtime_error("设置分组 id 重复：" + id);
+    ids.push_back(id);
+    if (!g.contains("title") || !g["title"].is_string()) throw std::runtime_error("设置分组 " + id + " 缺少 title");
+    if (g.contains("description") && !g["description"].is_string()) throw std::runtime_error("设置分组 " + id + " 的 description 须为字符串");
+    if (g.contains("collapsed") && !g["collapsed"].is_boolean()) throw std::runtime_error("设置分组 " + id + " 的 collapsed 须为布尔值");
   }
 }
 
@@ -326,6 +361,8 @@ PluginManifest ReadPluginManifest(const std::filesystem::path& dir) {
     m.args = e.value("args", std::vector<std::string>{});
     m.settings = j.value("settings", json::array());
     CheckSettingsSchema(m.settings);
+    m.settingGroups = j.value("settingGroups", json::array());
+    if (!m.settingGroups.empty()) CheckSettingGroups(m.settingGroups);
     m.features = StringList(j, "features");
     m.optionalFeatures = StringList(j, "optionalFeatures");
     m.startTimeoutMs = Milliseconds(j, "startTimeout", m.startTimeoutMs, 1000, 120000);
@@ -568,6 +605,7 @@ json PluginHost::PluginJson(const Plugin& p, size_t maxLogs) const {
           {"metrics", p.metrics},
           {"resources", p.resources},
           {"settingsSchema", p.m.settings},
+          {"settingGroups", p.m.settingGroups},
           {"settings", p.settings},
           {"logs", logs}};
 }
